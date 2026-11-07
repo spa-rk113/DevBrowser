@@ -15,12 +15,20 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.ConsoleMessage
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.*
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
+import java.net.URLEncoder
 import kotlin.math.max
 
 class MainActivity : Activity() {
@@ -49,8 +57,15 @@ class MainActivity : Activity() {
         getSharedPreferences("devbrowser_session", Context.MODE_PRIVATE)
     }
 
+    private val bg = Color.rgb(15, 18, 25)
+    private val surface = Color.rgb(25, 30, 40)
+    private val surface2 = Color.rgb(36, 43, 56)
+    private val accent = Color.rgb(139, 124, 255)
+    private val textColor = Color.rgb(238, 241, 248)
+    private val muted = Color.rgb(157, 169, 188)
+
+    private var panelHeight = 310
     private var currentDevTab = "Elements"
-    private var panelHeight = 300
     private var inspectEnabled = false
 
     private var selectedHtml = ""
@@ -58,18 +73,10 @@ class MainActivity : Activity() {
     private var selectedComputedCss = ""
     private var selectedSelector = ""
     private var boxModelJson = "{}"
-
     private var domNodes = JSONArray()
+
     private val consoleHistory = mutableListOf<String>()
     private var consoleOutput: TextView? = null
-
-    private val bg = Color.rgb(15, 18, 25)
-    private val surface = Color.rgb(25, 30, 40)
-    private val surface2 = Color.rgb(36, 43, 56)
-    private val accent = Color.rgb(76, 156, 255)
-    private val orange = Color.rgb(255, 174, 82)
-    private val textColor = Color.rgb(238, 241, 248)
-    private val muted = Color.rgb(157, 169, 188)
 
     private val activeWeb: WebView?
         get() = tabs.firstOrNull { it.id == activeTabId }?.web
@@ -83,21 +90,23 @@ class MainActivity : Activity() {
             WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         )
 
-        panelHeight = prefs.getInt("panel_height", 300)
+        panelHeight = prefs.getInt("panel_height", 310)
+            .coerceIn(180, 650)
+
         currentDevTab = prefs.getString("last_dev_tab", "Elements")
             ?: "Elements"
 
         buildInterface()
-
         restoreTabs()
 
         if (prefs.getBoolean("show_tutorial", true)) {
-            root.postDelayed({ showTutorial() }, 800)
+            root.postDelayed({ showTutorial() }, 700)
         }
     }
 
-    private fun dp(value: Int): Int =
-        (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
+    }
 
     private fun rounded(
         color: Int,
@@ -107,13 +116,14 @@ class MainActivity : Activity() {
         return GradientDrawable().apply {
             setColor(color)
             cornerRadius = dp(radius).toFloat()
+
             if (stroke != Color.TRANSPARENT) {
                 setStroke(dp(1), stroke)
             }
         }
     }
 
-    private fun label(
+    private fun makeLabel(
         value: String,
         size: Float = 12f,
         color: Int = textColor
@@ -126,7 +136,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun button(
+    private fun makeButton(
         value: String,
         action: () -> Unit
     ): TextView {
@@ -137,11 +147,13 @@ class MainActivity : Activity() {
             setTextColor(textColor)
             setPadding(dp(10), dp(7), dp(10), dp(7))
             background = rounded(surface2, Color.TRANSPARENT, 10)
+            isClickable = true
+            isFocusable = true
             setOnClickListener { action() }
         }
     }
 
-    private fun editor(
+    private fun makeEditor(
         value: String,
         hintText: String,
         lines: Int = 4
@@ -158,17 +170,19 @@ class MainActivity : Activity() {
             minLines = lines
             typeface = Typeface.MONOSPACE
             isSingleLine = false
+            setHorizontallyScrolling(true)
         }
     }
 
     // ---------------------------------------------------------
-    // BROWSER INTERFACE
+    // MAIN INTERFACE
     // ---------------------------------------------------------
 
     private fun buildInterface() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(bg)
+            clipToPadding = false
         }
 
         toolbar = LinearLayout(this).apply {
@@ -178,23 +192,23 @@ class MainActivity : Activity() {
             setBackgroundColor(bg)
         }
 
-        toolbar.addView(button("‹") {
+        toolbar.addView(makeButton("‹") {
             activeWeb?.let {
                 if (it.canGoBack()) it.goBack()
             }
         })
 
-        toolbar.addView(button("›") {
+        toolbar.addView(makeButton("›") {
             activeWeb?.let {
                 if (it.canGoForward()) it.goForward()
             }
         })
 
-        toolbar.addView(button("↻") {
+        toolbar.addView(makeButton("↻") {
             activeWeb?.reload()
         })
 
-        toolbar.addView(button("⌂") {
+        toolbar.addView(makeButton("⌂") {
             activeWeb?.loadUrl("https://www.google.com")
         })
 
@@ -210,10 +224,13 @@ class MainActivity : Activity() {
 
             setOnEditorActionListener { _, action, _ ->
                 if (action == EditorInfo.IME_ACTION_GO ||
-                    action == EditorInfo.IME_ACTION_DONE) {
+                    action == EditorInfo.IME_ACTION_DONE
+                ) {
                     loadAddress()
                     true
-                } else false
+                } else {
+                    false
+                }
             }
         }
 
@@ -222,7 +239,9 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(0, dp(42), 1f)
         )
 
-        toolbar.addView(button("⋮") { showMenu() })
+        toolbar.addView(makeButton("⋮") {
+            showMenu()
+        })
 
         tabStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -235,7 +254,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.WHITE)
         }
 
-        status = label("Ready", 10f, muted).apply {
+        status = makeLabel("Ready", 10f, muted).apply {
             setPadding(dp(10), dp(5), dp(10), dp(5))
             setBackgroundColor(surface)
         }
@@ -269,38 +288,135 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------
-    // TAB MANAGEMENT
+    // WEBVIEW AND TABS
     // ---------------------------------------------------------
 
-    private fun restoreTabs() {
-        val saved = prefs.getString("saved_tabs", null)
-        var restored = false
+    private fun createWebView(tabId: Int): WebView {
+        return WebView(this).apply {
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                loadsImagesAutomatically = true
+                javaScriptCanOpenWindowsAutomatically = false
+                allowFileAccess = false
+                allowContentAccess = false
+                setSupportZoom(true)
+                builtInZoomControls = true
+                displayZoomControls = false
+            }
 
-        if (saved != null) {
-            try {
-                val array = JSONArray(saved)
+            addJavascriptInterface(
+                InspectorBridge(tabId),
+                "DevBrowserBridge"
+            )
 
-                for (i in 0 until array.length()) {
-                    val url = array.optString(i)
-                    if (url.isNotBlank()) {
-                        createTab(url, false)
-                        restored = true
+            webViewClient = object : WebViewClient() {
+
+                override fun onPageStarted(
+                    view: WebView?,
+                    url: String?,
+                    favicon: android.graphics.Bitmap?
+                ) {
+                    val item = tabs.firstOrNull { it.id == tabId }
+                        ?: return
+
+                    item.url = url ?: item.url
+
+                    if (tabId == activeTabId) {
+                        status.text = "Loading website..."
+                        address.setText(item.url)
+                        clearSelectedElement()
                     }
                 }
-            } catch (_: Exception) {
-                appendConsole("Session restore failed")
+
+                override fun onPageFinished(
+                    view: WebView?,
+                    url: String?
+                ) {
+                    val item = tabs.firstOrNull { it.id == tabId }
+                        ?: return
+
+                    item.url = url ?: item.url
+                    item.title = view?.title
+                        ?.takeIf { it.isNotBlank() }
+                        ?: item.url
+
+                    if (tabId == activeTabId) {
+                        address.setText(item.url)
+                        status.text = "Page loaded"
+                    }
+
+                    renderTabs()
+                    saveSession()
+
+                    view?.postDelayed({
+                        if (tabs.any { it.id == tabId }) {
+                            installInspector(view)
+                        }
+                    }, 250)
+                }
+
+                override fun onReceivedError(
+                    view: WebView?,
+                    request: android.webkit.WebResourceRequest?,
+                    error: android.webkit.WebResourceError?
+                ) {
+                    if (request?.isForMainFrame == true &&
+                        tabId == activeTabId
+                    ) {
+                        status.text = "Page failed to load"
+                    }
+                }
             }
-        }
 
-        if (!restored) {
-            createTab("https://www.google.com", true)
-        }
+            webChromeClient = object : WebChromeClient() {
 
-        if (tabs.isNotEmpty()) {
-            val index = prefs.getInt("active_tab_index", 0)
-                .coerceIn(0, tabs.lastIndex)
+                override fun onReceivedTitle(
+                    view: WebView?,
+                    title: String?
+                ) {
+                    val item = tabs.firstOrNull { it.id == tabId }
+                        ?: return
 
-            switchTab(tabs[index].id)
+                    if (!title.isNullOrBlank()) {
+                        item.title = title
+                    }
+
+                    if (tabId == activeTabId) {
+                        renderTabs()
+                    }
+                }
+
+                override fun onProgressChanged(
+                    view: WebView?,
+                    newProgress: Int
+                ) {
+                    if (tabId == activeTabId) {
+                        status.text = if (newProgress < 100) {
+                            "Loading $newProgress%"
+                        } else {
+                            "Page loaded"
+                        }
+                    }
+                }
+
+                override fun onConsoleMessage(
+                    message: ConsoleMessage
+                ): Boolean {
+                    val level = when (message.messageLevel()) {
+                        ConsoleMessage.MessageLevel.ERROR -> "ERROR"
+                        ConsoleMessage.MessageLevel.WARNING -> "WARN"
+                        ConsoleMessage.MessageLevel.DEBUG -> "DEBUG"
+                        else -> "LOG"
+                    }
+
+                    appendConsole(
+                        "[$level] ${message.message()}"
+                    )
+
+                    return true
+                }
+            }
         }
     }
 
@@ -317,113 +433,58 @@ class MainActivity : Activity() {
             return
         }
 
-        val web = WebView(this)
-
-        web.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            loadsImagesAutomatically = true
-            javaScriptCanOpenWindowsAutomatically = false
-            allowFileAccess = false
-            allowContentAccess = false
-            setSupportZoom(true)
-            builtInZoomControls = true
-            displayZoomControls = false
-        }
-
-        web.webViewClient = object : WebViewClient() {
-
-            override fun onPageStarted(
-                view: WebView?,
-                url: String?,
-                favicon: android.graphics.Bitmap?
-            ) {
-                if (view === activeWeb) {
-                    status.text = "Loading website..."
-                }
-            }
-
-            override fun onPageFinished(
-                view: WebView?,
-                url: String?
-            ) {
-                val item = tabs.firstOrNull { it.web === view }
-                    ?: return
-
-                item.url = url ?: item.url
-                item.title = view?.title ?: item.title
-
-                if (item.id == activeTabId) {
-                    address.setText(item.url)
-                    status.text = "Page loaded"
-                }
-
-                saveSession()
-                renderTabs()
-
-                installInspector(view)
-            }
-        }
-
-        web.webChromeClient = object : WebChromeClient() {
-
-            override fun onReceivedTitle(
-                view: WebView?,
-                title: String?
-            ) {
-                val item = tabs.firstOrNull { it.web === view }
-                    ?: return
-
-                item.title = title ?: item.title
-
-                if (item.id == activeTabId) {
-                    renderTabs()
-                }
-            }
-
-            override fun onConsoleMessage(
-                message: ConsoleMessage
-            ): Boolean {
-                val line = message.message()
-
-                if (line.startsWith("__DEVBROWSER__")) {
-                    try {
-                        val json = JSONObject(
-                            line.removePrefix("__DEVBROWSER__")
-                        )
-                        handleInspectorData(json)
-                    } catch (_: Exception) {
-                        appendConsole("Inspector response could not be read")
-                    }
-                } else {
-                    val level = when (message.messageLevel()) {
-                        ConsoleMessage.MessageLevel.ERROR -> "ERROR"
-                        ConsoleMessage.MessageLevel.WARNING -> "WARN"
-                        else -> "LOG"
-                    }
-
-                    appendConsole("[$level] $line")
-                }
-
-                return true
-            }
-        }
+        val id = nextTabId++
+        val web = createWebView(id)
 
         val item = BrowserTab(
-            id = nextTabId++,
+            id = id,
             web = web,
             title = "New tab",
             url = url
         )
 
         tabs.add(item)
-        activeTabId = item.id
+        switchTab(id)
 
-        switchTab(item.id)
+        if (load) {
+            web.loadUrl(url)
+        }
+    }
 
-        if (load) web.loadUrl(url)
+    private fun restoreTabs() {
+        val saved = prefs.getString("saved_tabs", null)
+        var restored = false
 
-        saveSession()
+        if (!saved.isNullOrBlank()) {
+            try {
+                val array = JSONArray(saved)
+
+                for (i in 0 until array.length()) {
+                    val url = array.optString(i)
+
+                    if (url.startsWith("http://") ||
+                        url.startsWith("https://")
+                    ) {
+                        createTab(url, true)
+                        restored = true
+                    }
+
+                    if (tabs.size >= 8) break
+                }
+            } catch (_: Exception) {
+                appendConsole("Session restore failed")
+            }
+        }
+
+        if (!restored) {
+            createTab("https://www.google.com")
+            return
+        }
+
+        val index = prefs.getInt("active_tab_index", 0)
+            .coerceIn(0, tabs.lastIndex)
+
+        switchTab(tabs[index].id)
     }
 
     private fun switchTab(id: Int) {
@@ -447,29 +508,48 @@ class MainActivity : Activity() {
         if (devPanel.visibility == View.VISIBLE) {
             requestDom()
         }
+
+        item.web.onResume()
     }
 
     private fun closeTab(id: Int) {
         val index = tabs.indexOfFirst { it.id == id }
         if (index < 0) return
 
+        val wasActive = id == activeTabId
         val item = tabs[index]
 
-        webContainer.removeView(item.web)
-        item.web.stopLoading()
-        item.web.destroy()
-        tabs.removeAt(index)
-
-        if (tabs.isEmpty()) {
-            createTab("https://www.google.com")
-        } else {
-            switchTab(tabs[index.coerceAtMost(tabs.lastIndex)].id)
+        if (wasActive) {
+            webContainer.removeView(item.web)
+            activeTabId = -1
         }
 
-        saveSession()
+        tabs.removeAt(index)
+
+        try {
+            item.web.stopLoading()
+            item.web.removeJavascriptInterface("DevBrowserBridge")
+            item.web.destroy()
+        } catch (_: Exception) {
+            // Ignore cleanup errors from an already-destroyed WebView.
+        }
+
+        if (tabs.isEmpty()) {
+            createTab()
+        } else if (wasActive) {
+            val nextIndex = (index - 1).coerceAtLeast(0)
+                .coerceAtMost(tabs.lastIndex)
+
+            switchTab(tabs[nextIndex].id)
+        } else {
+            renderTabs()
+            saveSession()
+        }
     }
 
     private fun renderTabs() {
+        if (!::tabStrip.isInitialized) return
+
         tabStrip.removeAllViews()
 
         tabs.forEach { item ->
@@ -480,7 +560,8 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(9), dp(4), dp(5), dp(4))
                 background = rounded(
-                    if (selected) Color.rgb(45, 65, 94) else surface2,
+                    if (selected) Color.rgb(45, 55, 82)
+                    else surface2,
                     if (selected) accent else Color.TRANSPARENT
                 )
             }
@@ -490,7 +571,9 @@ class MainActivity : Activity() {
                 textSize = 11f
                 setTextColor(if (selected) Color.WHITE else muted)
                 maxWidth = dp(105)
-                setOnClickListener { switchTab(item.id) }
+                setOnClickListener {
+                    switchTab(item.id)
+                }
             }
 
             val close = TextView(this).apply {
@@ -498,7 +581,9 @@ class MainActivity : Activity() {
                 textSize = 16f
                 setTextColor(muted)
                 setPadding(dp(6), 0, dp(4), 0)
-                setOnClickListener { closeTab(item.id) }
+                setOnClickListener {
+                    closeTab(item.id)
+                }
             }
 
             tab.addView(title)
@@ -515,7 +600,7 @@ class MainActivity : Activity() {
             )
         }
 
-        tabStrip.addView(button("+") {
+        tabStrip.addView(makeButton("+") {
             createTab()
         })
     }
@@ -525,8 +610,8 @@ class MainActivity : Activity() {
 
         val array = JSONArray()
 
-        tabs.forEach {
-            array.put(it.web.url ?: it.url)
+        tabs.forEach { item ->
+            array.put(item.web.url ?: item.url)
         }
 
         prefs.edit()
@@ -546,22 +631,26 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------
 
     private fun loadAddress() {
-        var url = address.text.toString().trim()
-        if (url.isBlank()) return
+        val input = address.text.toString().trim()
+        if (input.isBlank()) return
 
-        if (!url.startsWith("https://") &&
-            !url.startsWith("http://")) {
+        val url = when {
+            input.startsWith("https://") ||
+                input.startsWith("http://") -> input
 
-            url = if (url.contains(".") && !url.contains(" ")) {
-                "https://$url"
-            } else {
+            input.contains(" ") ||
+                !input.contains(".") -> {
                 "https://www.google.com/search?q=" +
-                    java.net.URLEncoder.encode(url, "UTF-8")
+                    URLEncoder.encode(input, "UTF-8")
             }
+
+            else -> "https://$input"
         }
 
-        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
-            .hideSoftInputFromWindow(address.windowToken, 0)
+        val manager = getSystemService(INPUT_METHOD_SERVICE)
+            as InputMethodManager
+
+        manager.hideSoftInputFromWindow(address.windowToken, 0)
 
         activeWeb?.loadUrl(url)
     }
@@ -606,13 +695,29 @@ class MainActivity : Activity() {
         currentDevTab = tab
         devPanel.visibility = View.VISIBLE
         renderPanel()
+
+        devPanel.alpha = 0f
+        devPanel.animate()
+            .alpha(1f)
+            .setDuration(160)
+            .start()
+
         requestDom()
         saveSession()
     }
 
     private fun closeDevTools() {
-        devPanel.visibility = View.GONE
         toggleInspect(false)
+
+        devPanel.animate()
+            .alpha(0f)
+            .setDuration(120)
+            .withEndAction {
+                devPanel.visibility = View.GONE
+                devPanel.alpha = 1f
+            }
+            .start()
+
         saveSession()
     }
 
@@ -637,15 +742,15 @@ class MainActivity : Activity() {
                         val delta = (
                             (startY - event.rawY) /
                                 resources.displayMetrics.density
-                        ).toInt()
+                            ).toInt()
 
                         val screenDp = (
                             resources.displayMetrics.heightPixels /
                                 resources.displayMetrics.density
-                        ).toInt()
+                            ).toInt()
 
                         panelHeight = (startHeight + delta)
-                            .coerceIn(180, max(180, screenDp - 200))
+                            .coerceIn(180, max(180, screenDp - 190))
 
                         devPanel.layoutParams =
                             devPanel.layoutParams.apply {
@@ -677,39 +782,51 @@ class MainActivity : Activity() {
         }
 
         listOf("Elements", "Styles", "Console").forEach { name ->
-            bar.addView(TextView(this).apply {
-                text = if (name == currentDevTab) "● $name" else name
+            val tab = TextView(this).apply {
+                text = if (name == currentDevTab) {
+                    "● $name"
+                } else {
+                    name
+                }
+
                 textSize = 12f
                 typeface = Typeface.DEFAULT_BOLD
-                setTextColor(if (name == currentDevTab) accent else muted)
+                setTextColor(
+                    if (name == currentDevTab) accent else muted
+                )
                 setPadding(dp(12), dp(13), dp(12), dp(13))
-
                 setOnClickListener {
                     currentDevTab = name
                     renderPanel()
-                    requestDom()
+                    if (name != "Console") requestDom()
                     saveSession()
                 }
-            })
+            }
+
+            bar.addView(tab)
         }
 
-        bar.addView(TextView(this).apply {
-            text = "✕"
-            gravity = Gravity.CENTER
-            setTextColor(muted)
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            setOnClickListener { closeDevTools() }
+        bar.addView(
+            View(this),
+            LinearLayout.LayoutParams(0, 1, 1f)
+        )
+
+        bar.addView(makeButton("✕") {
+            closeDevTools()
         })
 
         devPanel.addView(bar)
 
-        panelBody = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(8), dp(10), dp(12))
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
             setBackgroundColor(bg)
         }
 
-        val scroll = ScrollView(this)
+        panelBody = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(14))
+        }
+
         scroll.addView(panelBody)
 
         devPanel.addView(
@@ -730,139 +847,183 @@ class MainActivity : Activity() {
 
     private fun renderElements() {
         panelBody.addView(
-            label("ELEMENTS  /  DOM INSPECTOR", 11f, accent)
+            makeLabel("ELEMENTS  /  DOM INSPECTOR", 11f, accent)
         )
 
-        panelBody.addView(button(
-            if (inspectEnabled) "Stop picking" else "⌖  Pick Element"
-        ) {
-            toggleInspect(!inspectEnabled)
-            renderPanel()
-        })
+        panelBody.addView(
+            makeButton(
+                if (inspectEnabled) "Stop picking elements"
+                else "◎  Pick element on webpage"
+            ) {
+                toggleInspect(!inspectEnabled)
+            }
+        )
 
         panelBody.addView(
-            label(
-                if (inspectEnabled) {
-                    "Pick mode ON · Tap an element on the webpage"
-                } else {
-                    "Select a DOM row or use Pick Element"
+            makeLabel(
+                selectedSelector.ifBlank {
+                    "Select an element or wait for the page DOM."
                 },
-                10f,
-                muted
+                12f
             )
         )
 
-        val tree = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(6), dp(6), dp(6), dp(6))
-            background = rounded(surface)
-        }
+        panelBody.addView(
+            makeLabel("DOCUMENT TREE", 11f, accent)
+        )
 
         if (domNodes.length() == 0) {
-            tree.addView(label(
-                "Waiting for webpage DOM...",
-                11f,
-                muted
-            ))
+            panelBody.addView(
+                makeLabel(
+                    "DOM is loading. Tap Refresh DOM if it stays empty.",
+                    11f,
+                    muted
+                )
+            )
         } else {
             for (i in 0 until domNodes.length()) {
                 val node = domNodes.optJSONObject(i) ?: continue
-                val path = node.optJSONArray("path") ?: JSONArray()
                 val depth = node.optInt("depth", 0)
+                val path = node.optJSONArray("path") ?: JSONArray()
                 val selected = node.optBoolean("selected", false)
+                val labelText = node.optString("label", "element")
 
-                tree.addView(TextView(this).apply {
-                    text = (if (selected) "▶ " else "  ") +
-                        node.optString("label", "element")
+                val row = TextView(this).apply {
+                    text = (if (selected) "◆ " else "  ") +
+                        labelText
+
                     textSize = 11f
                     typeface = Typeface.MONOSPACE
-                    setTextColor(if (selected) orange else textColor)
+                    setTextColor(
+                        if (selected) accent else textColor
+                    )
                     setPadding(
-                        dp(5 + depth * 12),
+                        dp(8 + depth * 13),
                         dp(7),
                         dp(5),
                         dp(7)
                     )
-
-                    if (selected) {
-                        background = rounded(Color.rgb(66, 48, 30))
+                    background = if (selected) {
+                        rounded(Color.rgb(43, 43, 68))
+                    } else {
+                        rounded(bg)
                     }
 
                     setOnClickListener {
                         selectDomPath(path)
                     }
-                })
+                }
+
+                panelBody.addView(
+                    row,
+                    LinearLayout.LayoutParams(-1, -2)
+                )
             }
         }
 
-        val treeScroll = ScrollView(this)
-        treeScroll.addView(tree)
+        panelBody.addView(makeButton("↻  Refresh DOM") {
+            requestDom()
+        })
 
         panelBody.addView(
-            treeScroll,
-            LinearLayout.LayoutParams(-1, dp(145))
+            makeLabel("HTML EDITOR · SELECTED ELEMENT", 11f, accent)
         )
 
-        panelBody.addView(
-            label("SELECTED HTML", 11f, accent)
-        )
-
-        val html = editor(
+        val htmlEditor = makeEditor(
             selectedHtml,
             "Select an element to load its HTML.",
             5
         )
 
         panelBody.addView(
-            html,
-            LinearLayout.LayoutParams(-1, dp(110))
+            htmlEditor,
+            LinearLayout.LayoutParams(-1, dp(135))
         )
 
-        panelBody.addView(button("Apply HTML") {
-            if (selectedSelector.isBlank()) {
+        panelBody.addView(makeButton("Apply HTML") {
+            if (selectedHtml.isBlank()) {
                 status.text = "Select an element first"
             } else {
-                val quoted = JSONObject.quote(html.text.toString())
-
-                activeWeb?.evaluateJavascript(
-                    """
-                    (function(){
-                        const el = window.__devSelected;
-                        if (!el) return;
-                        el.innerHTML = $quoted;
-                        window.__devSendSelection(el);
-                    })();
-                    """.trimIndent(),
-                    null
-                )
+                applyHtml(htmlEditor.text.toString())
             }
-        })
-
-        panelBody.addView(button("Refresh DOM") {
-            requestDom()
         })
     }
 
     private fun selectDomPath(path: JSONArray) {
+        val values = mutableListOf<Int>()
+
+        for (i in 0 until path.length()) {
+            values.add(path.optInt(i, -1))
+        }
+
+        val jsonPath = JSONArray(values).toString()
+        val quotedPath = JSONObject.quote(jsonPath)
+
         activeWeb?.evaluateJavascript(
             """
             (function(){
-                let el = document.body;
-                const path = $path;
+                try {
+                    const path = JSON.parse($quotedPath);
+                    let node = document.body;
 
-                for (const i of path) {
-                    if (!el || !el.children[i]) return;
-                    el = el.children[i];
-                }
+                    for (const index of path) {
+                        if (!node || !node.children[index]) return;
+                        node = node.children[index];
+                    }
 
-                if (el) {
-                    window.__devHighlight(el);
-                    window.__devSendSelection(el);
+                    if (node && window.__dbSelect) {
+                        window.__dbSelect(node);
+                    }
+                } catch(e) {
+                    console.error(e);
                 }
             })();
             """.trimIndent(),
             null
         )
+    }
+
+    private fun applyHtml(html: String) {
+        if (html.isBlank()) {
+            status.text = "HTML cannot be empty"
+            return
+        }
+
+        if (html.length > 50000) {
+            status.text = "HTML is too large (50 KB limit)"
+            return
+        }
+
+        val quoted = JSONObject.quote(html)
+
+        activeWeb?.evaluateJavascript(
+            """
+            (function(){
+                try {
+                    const old = window.__dbSelected;
+                    if (!old || !old.parentNode) {
+                        return "No selected element";
+                    }
+
+                    const template = document.createElement("template");
+                    template.innerHTML = $quoted;
+
+                    const first = template.content.firstElementChild;
+                    if (!first) return "Invalid HTML";
+
+                    old.replaceWith(template.content);
+                    window.__dbSelected = first;
+                    window.__dbSend(first);
+
+                    return "HTML applied";
+                } catch(e) {
+                    return "HTML error: " + e.message;
+                }
+            })();
+            """.trimIndent()
+        ) { result ->
+            status.text = decodeJsResult(result)
+        }
     }
 
     // ---------------------------------------------------------
@@ -871,19 +1032,21 @@ class MainActivity : Activity() {
 
     private fun renderStyles() {
         panelBody.addView(
-            label("STYLES  /  CSS INSPECTOR", 11f, accent)
+            makeLabel("STYLES  /  CSS INSPECTOR", 11f, accent)
         )
 
         panelBody.addView(
-            label(
+            makeLabel(
                 selectedSelector.ifBlank {
-                    "Select an element to inspect CSS"
+                    "Select an element to inspect CSS."
                 },
                 12f
             )
         )
 
-        panelBody.addView(label("BOX MODEL", 11f, accent))
+        panelBody.addView(
+            makeLabel("BOX MODEL", 11f, accent)
+        )
 
         val box = try {
             JSONObject(boxModelJson)
@@ -899,33 +1062,45 @@ class MainActivity : Activity() {
         }
 
         boxView.addView(
-            boxLayer("MARGIN", box.optString("margin", "—"),
-                Color.rgb(104, 75, 38))
+            boxLayer(
+                "MARGIN",
+                box.optString("margin", "—"),
+                Color.rgb(104, 75, 38)
+            )
         )
 
         boxView.addView(
-            boxLayer("BORDER", box.optString("border", "—"),
-                Color.rgb(137, 89, 39))
+            boxLayer(
+                "BORDER",
+                box.optString("border", "—"),
+                Color.rgb(137, 89, 39)
+            )
         )
 
         boxView.addView(
-            boxLayer("PADDING", box.optString("padding", "—"),
-                Color.rgb(44, 91, 61))
+            boxLayer(
+                "PADDING",
+                box.optString("padding", "—"),
+                Color.rgb(44, 91, 61)
+            )
         )
 
         boxView.addView(
-            boxLayer("CONTENT", box.optString("content", "—"),
-                Color.rgb(42, 75, 124))
+            boxLayer(
+                "CONTENT",
+                box.optString("content", "—"),
+                Color.rgb(42, 75, 124)
+            )
         )
 
         panelBody.addView(boxView)
 
         panelBody.addView(
-            label("COMPUTED CSS", 11f, accent)
+            makeLabel("COMPUTED CSS", 11f, accent)
         )
 
         panelBody.addView(
-            label(
+            makeLabel(
                 selectedComputedCss.ifBlank {
                     "No element selected."
                 },
@@ -938,38 +1113,52 @@ class MainActivity : Activity() {
         )
 
         panelBody.addView(
-            label("INLINE CSS · EDITABLE", 11f, accent)
+            makeLabel("INLINE CSS · EDITABLE", 11f, accent)
         )
 
-        val css = editor(
+        val cssEditor = makeEditor(
             selectedInlineCss,
             "Select an element to load its CSS.",
             4
         )
 
         panelBody.addView(
-            css,
+            cssEditor,
             LinearLayout.LayoutParams(-1, dp(100))
         )
 
-        panelBody.addView(button("Apply CSS") {
+        panelBody.addView(makeButton("Apply CSS") {
             if (selectedSelector.isBlank()) {
                 status.text = "Select an element first"
             } else {
-                val quoted = JSONObject.quote(css.text.toString())
+                val quoted = JSONObject.quote(
+                    cssEditor.text.toString()
+                )
 
                 activeWeb?.evaluateJavascript(
                     """
                     (function(){
-                        const el = window.__devSelected;
-                        if (!el) return;
-                        el.style.cssText = $quoted;
-                        window.__devSendSelection(el);
+                        try {
+                            const el = window.__dbSelected;
+                            if (!el) return "No selected element";
+
+                            el.style.cssText = $quoted;
+                            window.__dbSend(el);
+
+                            return "CSS applied";
+                        } catch(e) {
+                            return "CSS error: " + e.message;
+                        }
                     })();
-                    """.trimIndent(),
-                    null
-                )
+                    """.trimIndent()
+                ) { result ->
+                    status.text = decodeJsResult(result)
+                }
             }
+        })
+
+        panelBody.addView(makeButton("↻  Refresh styles") {
+            requestDom()
         })
     }
 
@@ -997,15 +1186,15 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------
-    // CONSOLE
+    // JAVASCRIPT CONSOLE
     // ---------------------------------------------------------
 
     private fun renderConsole() {
         panelBody.addView(
-            label("CONSOLE  /  JAVASCRIPT", 11f, accent)
+            makeLabel("CONSOLE  /  JAVASCRIPT", 11f, accent)
         )
 
-        consoleOutput = label(
+        consoleOutput = makeLabel(
             consoleHistory.joinToString("\n")
                 .ifBlank { "DevBrowser console ready." },
             11f
@@ -1013,6 +1202,7 @@ class MainActivity : Activity() {
             typeface = Typeface.MONOSPACE
             setPadding(dp(9), dp(9), dp(9), dp(9))
             background = rounded(Color.rgb(10, 13, 18))
+            setTextIsSelectable(true)
         }
 
         panelBody.addView(
@@ -1020,7 +1210,7 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(-1, dp(145))
         )
 
-        val command = editor(
+        val command = makeEditor(
             "",
             "Enter JavaScript here...",
             2
@@ -1031,55 +1221,70 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(-1, dp(75))
         )
 
-        panelBody.addView(button("▶  Run JavaScript") {
+        panelBody.addView(makeButton("▶  Run JavaScript") {
             val source = command.text.toString()
 
             if (source.isNotBlank()) {
-                appendConsole("> $source")
-
-                val quoted = JSONObject.quote(source)
-
-                activeWeb?.evaluateJavascript(
-                    """
-                    (function(){
-                        try {
-                            const result = (0, eval)($quoted);
-
-                            if (result === undefined) return "undefined";
-
-                            if (typeof result === "object" && result !== null) {
-                                return JSON.stringify(result, null, 2);
-                            }
-
-                            return String(result);
-                        } catch(e) {
-                            return "Error: " + (e.stack || e);
-                        }
-                    })();
-                    """.trimIndent()
-                ) { result ->
-                    val output = try {
-                        JSONArray("[$result]").optString(0, "undefined")
-                    } catch (_: Exception) {
-                        result ?: "undefined"
-                    }
-
-                    appendConsole(output)
-                }
+                runJavaScript(source)
             }
         })
 
-        panelBody.addView(button("Clear console") {
+        panelBody.addView(makeButton("Clear console") {
             consoleHistory.clear()
             consoleOutput?.text = "Console cleared."
         })
     }
 
+    private fun runJavaScript(source: String) {
+        appendConsole("> $source")
+
+        val quoted = JSONObject.quote(source)
+
+        activeWeb?.evaluateJavascript(
+            """
+            (function(){
+                try {
+                    const result = (0, eval)($quoted);
+
+                    return Promise.resolve(result).then(function(value) {
+                        if (value === undefined) return "undefined";
+
+                        if (typeof value === "string") return value;
+
+                        try {
+                            return JSON.stringify(value, null, 2);
+                        } catch(e) {
+                            return String(value);
+                        }
+                    });
+                } catch(e) {
+                    return "Error: " + (e.stack || e.message || e);
+                }
+            })();
+            """.trimIndent()
+        ) { result ->
+            appendConsole(decodeJsResult(result))
+        } ?: appendConsole("No active webpage.")
+    }
+
+    private fun decodeJsResult(raw: String?): String {
+        if (raw.isNullOrBlank() || raw == "null") {
+            return "undefined"
+        }
+
+        return try {
+            val value = JSONTokener(raw).nextValue()
+            value?.toString() ?: "undefined"
+        } catch (_: Exception) {
+            raw
+        }
+    }
+
     private fun appendConsole(line: String) {
         runOnUiThread {
-            consoleHistory.add(line)
+            consoleHistory.add(line.take(4000))
 
-            if (consoleHistory.size > 200) {
+            while (consoleHistory.size > 200) {
                 consoleHistory.removeAt(0)
             }
 
@@ -1089,40 +1294,223 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------
-    // INSPECTOR DATA
+    // INSPECTOR JAVASCRIPT BRIDGE
     // ---------------------------------------------------------
 
-    private fun handleInspectorData(data: JSONObject) {
-        runOnUiThread {
-            domNodes = data.optJSONArray("treeNodes") ?: JSONArray()
-            selectedHtml = data.optString("html", "")
-            selectedInlineCss = data.optString("inlineCss", "")
-            selectedComputedCss = data.optString("computedCss", "")
-            selectedSelector = data.optString("selector", "")
-            boxModelJson = data.optString("boxModel", "{}")
+    private inner class InspectorBridge(
+        private val tabId: Int
+    ) {
+        @JavascriptInterface
+        fun postData(payload: String) {
+            if (payload.length > 250000) return
 
-            status.text = if (selectedSelector.isNotBlank()) {
-                "Selected: $selectedSelector"
-            } else {
-                "DOM loaded"
-            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (tabId != activeTabId) return@runOnUiThread
 
-            if (devPanel.visibility == View.VISIBLE &&
-                (currentDevTab == "Elements" ||
-                    currentDevTab == "Styles")) {
-                renderPanel()
+                try {
+                    val data = JSONObject(payload)
+                    handleInspectorData(data)
+                } catch (_: Exception) {
+                    status.text = "Inspector data error"
+                }
             }
         }
+    }
+
+    private fun installInspector(view: WebView?) {
+        if (view == null) return
+
+        val script = """
+        (function() {
+            if (window.__dbInstalled) {
+                window.__dbSend(window.__dbSelected || document.body);
+                return;
+            }
+
+            window.__dbInstalled = true;
+            window.__dbInspect = false;
+            window.__dbSelected = null;
+            window.__dbPrevious = null;
+            window.__dbOldOutline = "";
+            window.__dbOldOffset = "";
+
+            function makeSelector(el) {
+                if (!el || !el.tagName) return "";
+
+                let value = el.tagName.toLowerCase();
+
+                if (el.id) value += "#" + el.id;
+
+                if (el.classList && el.classList.length) {
+                    value += "." + Array.from(el.classList)
+                        .slice(0, 3)
+                        .join(".");
+                }
+
+                return value;
+            }
+
+            function getPath(el) {
+                const path = [];
+                let node = el;
+
+                while (node && node !== document.body) {
+                    const parent = node.parentElement;
+                    if (!parent) break;
+
+                    path.unshift(
+                        Array.prototype.indexOf.call(
+                            parent.children,
+                            node
+                        )
+                    );
+
+                    node = parent;
+                }
+
+                return path;
+            }
+
+            function getTree() {
+                const output = [];
+                let count = 0;
+
+                function walk(node, depth, path) {
+                    if (!node || count >= 160 || depth > 6) return;
+                    if (node.nodeType !== 1) return;
+
+                    count++;
+
+                    output.push({
+                        label: makeSelector(node),
+                        depth: depth,
+                        path: path,
+                        selected: node === window.__dbSelected
+                    });
+
+                    const children = Array.from(node.children);
+
+                    for (let i = 0; i < children.length; i++) {
+                        walk(
+                            children[i],
+                            depth + 1,
+                            path.concat(i)
+                        );
+
+                        if (count >= 160) break;
+                    }
+                }
+
+                if (document.body) {
+                    walk(document.body, 0, []);
+                }
+
+                return output;
+            }
+
+            window.__dbSend = function(el) {
+                if (!el || el.nodeType !== 1) return;
+
+                window.__dbSelected = el;
+
+                const computed = window.getComputedStyle(el);
+
+                const properties = [
+                    "display",
+                    "position",
+                    "width",
+                    "height",
+                    "margin",
+                    "padding",
+                    "color",
+                    "background-color",
+                    "font-size",
+                    "font-family",
+                    "border",
+                    "opacity"
+                ];
+
+                const css = properties.map(function(name) {
+                    return name + ": " +
+                        computed.getPropertyValue(name) + ";";
+                }).join("\\n");
+
+                const data = {
+                    selector: makeSelector(el),
+                    html: (el.outerHTML || "").slice(0, 12000),
+                    inlineCss: el.getAttribute("style") || "",
+                    computedCss: css,
+                    boxModel: JSON.stringify({
+                        margin: computed.margin,
+                        border: computed.borderWidth,
+                        padding: computed.padding,
+                        content: computed.width + " × " + computed.height
+                    }),
+                    treeNodes: getTree()
+                };
+
+                try {
+                    window.DevBrowserBridge.postData(
+                        JSON.stringify(data)
+                    );
+                } catch(e) {
+                    console.error("DevBrowser bridge:", e);
+                }
+            };
+
+            window.__dbSelect = function(el) {
+                if (!el) return;
+
+                if (window.__dbPrevious) {
+                    window.__dbPrevious.style.outline =
+                        window.__dbOldOutline;
+                    window.__dbPrevious.style.outlineOffset =
+                        window.__dbOldOffset;
+                }
+
+                window.__dbPrevious = el;
+                window.__dbOldOutline = el.style.outline || "";
+                window.__dbOldOffset =
+                    el.style.outlineOffset || "";
+
+                el.style.outline = "2px solid #8B7CFF";
+                el.style.outlineOffset = "2px";
+
+                window.__dbSend(el);
+            };
+
+            document.addEventListener("click", function(event) {
+                if (!window.__dbInspect) return;
+
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation();
+
+                const target = event.target;
+
+                if (target && target.nodeType === 1) {
+                    window.__dbSelect(target);
+                }
+            }, true);
+
+            window.__dbSend(document.body);
+        })();
+        """.trimIndent()
+
+        view.evaluateJavascript(script, null)
     }
 
     private fun requestDom() {
         activeWeb?.evaluateJavascript(
             """
             (function(){
-                if (window.__devSendSelection) {
-                    window.__devSendSelection(
-                        window.__devSelected || document.body
+                if (window.__dbSend) {
+                    window.__dbSend(
+                        window.__dbSelected || document.body
                     );
+                } else {
+                    console.warn("Inspector is not ready yet.");
                 }
             })();
             """.trimIndent(),
@@ -1130,150 +1518,41 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun installInspector(view: WebView?) {
-        if (view == null) return
+    private fun handleInspectorData(data: JSONObject) {
+        domNodes = data.optJSONArray("treeNodes") ?: JSONArray()
+        selectedHtml = data.optString("html", "")
+        selectedInlineCss = data.optString("inlineCss", "")
+        selectedComputedCss = data.optString("computedCss", "")
+        selectedSelector = data.optString("selector", "")
+        boxModelJson = data.optString("boxModel", "{}")
 
-        val script = """
-        (function(){
-            if (window.__devBrowserInstalled) {
-                window.__devSendSelection(
-                    window.__devSelected || document.body
-                );
-                return;
-            }
+        status.text = if (selectedSelector.isNotBlank()) {
+            "Selected: $selectedSelector"
+        } else {
+            "DOM loaded"
+        }
 
-            window.__devBrowserInstalled = true;
-            window.__devInspect = false;
-            window.__devSelected = null;
-            window.__devPreviousOutline = null;
-            window.__devOldOutline = "";
-            window.__devOldOffset = "";
+        if (devPanel.visibility == View.VISIBLE &&
+            currentDevTab != "Console"
+        ) {
+            renderPanel()
+        }
+    }
 
-            window.__devHighlight = function(el) {
-                if (!el) return;
-
-                if (window.__devPreviousOutline) {
-                    window.__devPreviousOutline.style.outline =
-                        window.__devOldOutline;
-                    window.__devPreviousOutline.style.outlineOffset =
-                        window.__devOldOffset;
-                }
-
-                window.__devPreviousOutline = el;
-                window.__devOldOutline = el.style.outline || "";
-                window.__devOldOffset = el.style.outlineOffset || "";
-
-                el.style.outline = "2px solid #ff5722";
-                el.style.outlineOffset = "2px";
-
-                window.__devSelected = el;
-            };
-
-            function selector(el) {
-                if (!el || !el.tagName) return "";
-
-                let s = el.tagName.toLowerCase();
-
-                if (el.id) s += "#" + el.id;
-
-                if (el.classList && el.classList.length) {
-                    s += "." + Array.from(el.classList)
-                        .slice(0, 3).join(".");
-                }
-
-                return s;
-            }
-
-            function treeData() {
-                const nodes = [];
-                let count = 0;
-
-                function walk(node, depth, path) {
-                    if (!node || count >= 220 || depth > 6) return;
-                    if (node.nodeType !== 1) return;
-
-                    count++;
-
-                    nodes.push({
-                        label: selector(node),
-                        depth: depth,
-                        path: path,
-                        selected: node === window.__devSelected
-                    });
-
-                    Array.from(node.children).forEach(
-                        function(child, index) {
-                            walk(child, depth + 1, path.concat(index));
-                        }
-                    );
-                }
-
-                walk(document.body, 0, []);
-                return nodes;
-            }
-
-            window.__devSendSelection = function(el) {
-                if (!el) return;
-
-                window.__devSelected = el;
-
-                const computed = getComputedStyle(el);
-
-                const props = [
-                    "display", "position", "width", "height",
-                    "margin", "padding", "color",
-                    "background-color", "font-size",
-                    "font-family", "border", "opacity"
-                ];
-
-                const css = props.map(function(p) {
-                    return p + ": " + computed.getPropertyValue(p) + ";";
-                }).join("\\n");
-
-                const box = {
-                    margin: computed.margin,
-                    border: computed.borderWidth,
-                    padding: computed.padding,
-                    content: computed.width + " × " + computed.height
-                };
-
-                const data = {
-                    selector: selector(el),
-                    html: (el.outerHTML || "").slice(0, 18000),
-                    inlineCss: el.getAttribute("style") || "",
-                    computedCss: css,
-                    boxModel: JSON.stringify(box),
-                    treeNodes: treeData()
-                };
-
-                console.log("__DEVBROWSER__" + JSON.stringify(data));
-            };
-
-            document.addEventListener("click", function(e) {
-                if (!window.__devInspect) return;
-
-                e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-
-                const el = e.target;
-
-                window.__devHighlight(el);
-                window.__devSendSelection(el);
-            }, true);
-
-            window.__devSendSelection(document.body);
-        })();
-        """.trimIndent()
-
-        view.evaluateJavascript(script, null)
+    private fun clearSelectedElement() {
+        selectedHtml = ""
+        selectedInlineCss = ""
+        selectedComputedCss = ""
+        selectedSelector = ""
+        boxModelJson = "{}"
+        domNodes = JSONArray()
     }
 
     private fun toggleInspect(enabled: Boolean) {
         inspectEnabled = enabled
 
         activeWeb?.evaluateJavascript(
-            "window.__devInspect = $enabled;",
+            "window.__dbInspect = $enabled;",
             null
         )
 
@@ -1282,23 +1561,28 @@ class MainActivity : Activity() {
         } else {
             "Inspect mode OFF"
         }
+
+        if (devPanel.visibility == View.VISIBLE &&
+            currentDevTab == "Elements"
+        ) {
+            renderPanel()
+        }
     }
 
     // ---------------------------------------------------------
-    // FIRST-RUN TUTORIAL
+    // TUTORIAL
     // ---------------------------------------------------------
 
     private fun showTutorial() {
         val steps = arrayOf(
-            "Welcome to DevBrowser!\n\nA browser with built-in webpage developer tools.",
+            "Welcome to DevBrowser!\n\nA browser with built-in developer tools.",
             "ADDRESS BAR\n\nEnter a website or search term in the address bar.",
             "BROWSER TABS\n\nUse + to open a tab. Tap a tab to switch or × to close it.",
             "INSPECT ELEMENT\n\nOpen the menu and choose Inspect Element. Then tap an element on the webpage.",
             "ELEMENTS\n\nExplore the DOM tree and edit selected HTML.",
             "STYLES\n\nInspect CSS and edit inline styles.",
             "CONSOLE\n\nEnter JavaScript and run it on the current webpage.",
-            "RESIZE DEVTOOLS\n\nDrag the handle above the DevTools tabs to resize the panel.",
-            "SESSION\n\nYour open tab URLs are saved and restored when the app starts."
+            "RESIZE DEVTOOLS\n\nDrag the handle above the DevTools tabs to resize the panel."
         )
 
         var index = 0
@@ -1316,7 +1600,8 @@ class MainActivity : Activity() {
                         .apply()
                 }
                 .setPositiveButton(
-                    if (index == steps.lastIndex) "Finish" else "Next"
+                    if (index == steps.lastIndex) "Finish"
+                    else "Next"
                 ) { _, _ ->
                     if (index < steps.lastIndex) {
                         index++
@@ -1336,26 +1621,39 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------
-    // ACTIVITY LIFECYCLE
+    // LIFECYCLE AND BACK
     // ---------------------------------------------------------
 
     override fun onPause() {
         saveSession()
-        activeWeb?.onPause()
+
+        tabs.forEach {
+            try {
+                it.web.onPause()
+            } catch (_: Exception) {
+            }
+        }
+
         super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
+
         activeWeb?.onResume()
     }
 
     override fun onDestroy() {
-        tabs.forEach {
+        tabs.forEach { item ->
             try {
-                (it.web.parent as? ViewGroup)?.removeView(it.web)
-                it.web.stopLoading()
-                it.web.destroy()
+                (item.web.parent as? ViewGroup)
+                    ?.removeView(item.web)
+
+                item.web.stopLoading()
+                item.web.removeJavascriptInterface(
+                    "DevBrowserBridge"
+                )
+                item.web.destroy()
             } catch (_: Exception) {
             }
         }
@@ -1366,12 +1664,13 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Android")
     override fun onBackPressed() {
-        val web = activeWeb
-
         when {
             devPanel.visibility == View.VISIBLE -> closeDevTools()
-            web?.canGoBack() == true -> web.goBack()
+
+            activeWeb?.canGoBack() == true -> activeWeb?.goBack()
+
             tabs.size > 1 -> closeTab(activeTabId)
+
             else -> super.onBackPressed()
         }
     }
