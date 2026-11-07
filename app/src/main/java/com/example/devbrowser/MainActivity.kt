@@ -95,7 +95,7 @@ class MainActivity : Activity() {
                 for (i in 0 until array.length()) {
                     val url = array.optString(i)
                     if (url.isNotBlank()) {
-                        createTab(url, false)
+                        createTab(url, true)
                         restoredAny = true
                     }
                 }
