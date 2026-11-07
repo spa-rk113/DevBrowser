@@ -1,87 +1,115 @@
-
 from pathlib import Path
 from PIL import Image, ImageOps
 
-ROOT = Path(__file__).resolve().parent.parent
+# Find the actual repository root
+ROOT = Path(__file__).resolve().parent.parent.parent
+
+# Input logo
 SOURCE = ROOT / "assets" / "devbrowser-logo.png"
+
+# Android resources folder
 RES = ROOT / "app" / "src" / "main" / "res"
 
-if not SOURCE.exists():
-    raise FileNotFoundError(f"Logo missing: {SOURCE}")
 
-image = Image.open(SOURCE).convert("RGBA")
+def generate_icons():
+    if not SOURCE.exists():
+        raise FileNotFoundError(
+            f"Logo not found: {SOURCE}"
+        )
 
-# Square crop
-image = ImageOps.fit(
-    image,
-    (1024, 1024),
-    method=Image.Resampling.LANCZOS
-)
+    print("Loading DevBrowser logo...")
 
-# Legacy launcher icon sizes
-sizes = {
-    "mipmap-mdpi": 48,
-    "mipmap-hdpi": 72,
-    "mipmap-xhdpi": 96,
-    "mipmap-xxhdpi": 144,
-    "mipmap-xxxhdpi": 192,
-}
+    image = Image.open(SOURCE).convert("RGBA")
 
-for folder, size in sizes.items():
-    directory = RES / folder
-    directory.mkdir(parents=True, exist_ok=True)
-
-    icon = image.resize(
-        (size, size),
-        Image.Resampling.LANCZOS
+    # Create a square logo image
+    image = ImageOps.fit(
+        image,
+        (1024, 1024),
+        method=Image.Resampling.LANCZOS
     )
 
-    icon.save(directory / "ic_launcher.png")
+    # Generate launcher icons for all Android densities
+    sizes = {
+        "mipmap-mdpi": 48,
+        "mipmap-hdpi": 72,
+        "mipmap-xhdpi": 96,
+        "mipmap-xxhdpi": 144,
+        "mipmap-xxxhdpi": 192,
+    }
 
-# Adaptive icon foreground with safe padding
-foreground = Image.new("RGBA", (432, 432), (0, 0, 0, 0))
+    for folder, size in sizes.items():
+        directory = RES / folder
+        directory.mkdir(parents=True, exist_ok=True)
 
-logo = ImageOps.contain(
-    image,
-    (280, 280),
-    method=Image.Resampling.LANCZOS
-)
+        icon = image.resize(
+            (size, size),
+            Image.Resampling.LANCZOS
+        )
 
-x = (432 - logo.width) // 2
-y = (432 - logo.height) // 2
+        icon.save(directory / "ic_launcher.png")
 
-foreground.alpha_composite(logo, (x, y))
+        print(f"Generated {folder}: {size}x{size}")
 
-drawable = RES / "drawable-nodpi"
-drawable.mkdir(parents=True, exist_ok=True)
+    # Generate adaptive icon foreground
+    foreground = Image.new(
+        "RGBA",
+        (432, 432),
+        (0, 0, 0, 0)
+    )
 
-foreground.save(drawable / "ic_launcher_foreground.png")
+    logo = ImageOps.contain(
+        image,
+        (280, 280),
+        method=Image.Resampling.LANCZOS
+    )
 
-# Adaptive icon XML
-adaptive = RES / "mipmap-anydpi-v26"
-adaptive.mkdir(parents=True, exist_ok=True)
+    x = (432 - logo.width) // 2
+    y = (432 - logo.height) // 2
 
-(adaptive / "ic_launcher.xml").write_text(
-    """<?xml version="1.0" encoding="utf-8"?>
+    foreground.alpha_composite(logo, (x, y))
+
+    drawable = RES / "drawable-nodpi"
+    drawable.mkdir(parents=True, exist_ok=True)
+
+    foreground.save(
+        drawable / "ic_launcher_foreground.png"
+    )
+
+    # Generate adaptive icon XML
+    adaptive = RES / "mipmap-anydpi-v26"
+    adaptive.mkdir(parents=True, exist_ok=True)
+
+    adaptive_xml = """<?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background"/>
     <foreground android:drawable="@drawable/ic_launcher_foreground"/>
 </adaptive-icon>
-""",
-    encoding="utf-8"
-)
+"""
 
-# Background color
-values = RES / "values"
-values.mkdir(parents=True, exist_ok=True)
+    (adaptive / "ic_launcher.xml").write_text(
+        adaptive_xml,
+        encoding="utf-8"
+    )
 
-(values / "ic_launcher_background.xml").write_text(
-    """<?xml version="1.0" encoding="utf-8"?>
+    # Generate background color resource
+    values = RES / "values"
+    values.mkdir(parents=True, exist_ok=True)
+
+    background_xml = """<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#11141B</color>
 </resources>
-""",
-    encoding="utf-8"
-)
+"""
 
-print("DevBrowser icons generated successfully!")
+    (values / "ic_launcher_background.xml").write_text(
+        background_xml,
+        encoding="utf-8"
+    )
+
+    print("--------------------------------")
+    print("DevBrowser icons generated!")
+    print("--------------------------------")
+
+
+if __name__ == "__main__":
+    generate_icons()
