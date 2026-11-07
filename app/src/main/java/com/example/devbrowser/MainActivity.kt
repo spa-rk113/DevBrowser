@@ -42,7 +42,7 @@ override fun onCreate(savedInstanceState: Bundle?) {
 
     address = EditText(this).apply {
         hint = "Search or enter website"
-        singleLine = true
+        isSingleLine = true
         textSize = 14f
         setPadding(10, 0, 10, 0)
         setBackgroundColor(Color.WHITE)
