@@ -3,27 +3,30 @@
 
     <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
 
-        <!-- App typography -->
+        <!-- Typography -->
         <item name="android:fontFamily">sans</item>
 
-        <!-- Accent color -->
+        <!-- App colors -->
         <item name="android:colorAccent">#8B7CFF</item>
+        <item name="android:colorControlActivated">#8B7CFF</item>
+        <item name="android:colorControlHighlight">#338B7CFF</item>
+        <item name="android:colorControlNormal">#B8B8C5</item>
 
-        <!-- Main window -->
+        <!-- Window -->
         <item name="android:windowBackground">#101114</item>
-        <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
 
         <!-- System bars -->
         <item name="android:statusBarColor">#101114</item>
         <item name="android:navigationBarColor">#101114</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
 
-        <!-- Selection and controls -->
-        <item name="android:colorControlActivated">#8B7CFF</item>
-        <item name="android:colorControlHighlight">#338B7CFF</item>
-        <item name="android:colorControlNormal">#B8B8C5</item>
+        <!-- UI behavior -->
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowDisablePreview">false</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
 
     </style>
 
