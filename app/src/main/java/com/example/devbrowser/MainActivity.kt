@@ -12,6 +12,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
@@ -25,60 +26,116 @@ import kotlin.math.min
 
 class MainActivity : Activity() {
 
-    private lateinit var webView: WebView
+    private data class BrowserTab(
+        val id: Int,
+        val web: WebView,
+        var title: String,
+        var url: String
+    )
+
+    private val tabs = mutableListOf<BrowserTab>()
+    private var activeTabId = 0
+    private var nextTabId = 1
+
+    private lateinit var root: LinearLayout
+    private lateinit var toolbar: LinearLayout
+    private lateinit var tabStrip: LinearLayout
+    private lateinit var webContainer: FrameLayout
     private lateinit var address: EditText
     private lateinit var status: TextView
     private lateinit var devPanel: LinearLayout
     private lateinit var panelBody: LinearLayout
-    private lateinit var root: LinearLayout
 
     private val prefs by lazy {
-        getSharedPreferences("devbrowser_settings", Context.MODE_PRIVATE)
+        getSharedPreferences("devbrowser_session", Context.MODE_PRIVATE)
     }
+
+    private var currentTab = "Elements"
+    private var panelHeight = 310
+    private var inspectEnabled = false
 
     private var selectedHtml = ""
     private var selectedInlineCss = ""
     private var selectedComputedCss = ""
     private var selectedSelector = ""
+    private var boxModelJson = "{}"
+
     private var domNodes = JSONArray()
-    private var currentTab = "Elements"
-    private var panelHeight = 340
-    private var inspectEnabled = false
+    private val consoleHistory = mutableListOf<String>()
     private var consoleOutput: TextView? = null
 
-    private val consoleHistory = mutableListOf<String>()
+    private val bg = Color.rgb(17, 20, 27)
+    private val surface = Color.rgb(27, 32, 42)
+    private val surface2 = Color.rgb(36, 42, 54)
+    private val accent = Color.rgb(69, 153, 255)
+    private val orange = Color.rgb(255, 167, 65)
+    private val textColor = Color.rgb(235, 239, 247)
+    private val muted = Color.rgb(155, 166, 184)
 
-    private val bg = Color.rgb(24, 26, 31)
-    private val panelBg = Color.rgb(32, 35, 41)
-    private val textColor = Color.rgb(235, 237, 242)
-    private val accent = Color.rgb(255, 167, 38)
+    private val activeWeb: WebView?
+        get() = tabs.firstOrNull { it.id == activeTabId }?.web
+
+    private val activeBrowserTab: BrowserTab?
+        get() = tabs.firstOrNull { it.id == activeTabId }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        panelHeight = prefs.getInt("panel_height", 310)
+        currentTab = prefs.getString("last_dev_tab", "Elements") ?: "Elements"
+
         buildInterface()
 
-        val restored = savedInstanceState?.let {
-            webView.restoreState(it) != null
-        } ?: false
+        val saved = prefs.getString("saved_tabs", null)
+        var restoredAny = false
 
-        if (!restored) {
-            val lastUrl = prefs.getString("last_url", null)
-            webView.loadUrl(lastUrl ?: "https://www.google.com")
+        if (saved != null) {
+            try {
+                val array = JSONArray(saved)
+                for (i in 0 until array.length()) {
+                    val url = array.optString(i)
+                    if (url.isNotBlank()) {
+                        createTab(url, false)
+                        restoredAny = true
+                    }
+                }
+            } catch (_: Exception) {
+            }
         }
 
-        currentTab = prefs.getString("last_tab", "Elements") ?: "Elements"
-        panelHeight = prefs.getInt("panel_height", 340)
+        if (!restoredAny) {
+            createTab("https://www.google.com", false)
+        }
+
+        val savedIndex = prefs.getInt("active_tab_index", 0)
+        if (tabs.isNotEmpty()) {
+            val index = savedIndex.coerceIn(0, tabs.lastIndex)
+            switchTab(tabs[index].id)
+        }
 
         if (prefs.getBoolean("show_tutorial", true)) {
-            webView.postDelayed({ showTutorial() }, 900)
+            root.postDelayed({ showTutorial() }, 900)
         }
     }
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
-    private fun button(
+    private fun rounded(
+        color: Int,
+        stroke: Int = Color.TRANSPARENT,
+        radius: Int = 12
+    ): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+            if (stroke != Color.TRANSPARENT) {
+                setStroke(dp(1), stroke)
+            }
+        }
+    }
+
+    private fun makeButton(
         title: String,
         action: () -> Unit
     ): Button {
@@ -87,45 +144,70 @@ class MainActivity : Activity() {
             textSize = 12f
             isAllCaps = false
             minWidth = 0
-            setPadding(dp(8), 0, dp(8), 0)
+            minHeight = dp(40)
+            setPadding(dp(9), 0, dp(9), 0)
+            setTextColor(textColor)
+            background = rounded(surface2)
+            stateListAnimator = null
             setOnClickListener { action() }
         }
     }
 
-    private fun roundedBackground(
-        color: Int,
-        strokeColor: Int = Color.TRANSPARENT
-    ): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(8).toFloat()
-            if (strokeColor != Color.TRANSPARENT) {
-                setStroke(dp(1), strokeColor)
-            }
+    private fun makeLabel(
+        value: String,
+        size: Float = 12f,
+        color: Int = textColor
+    ): TextView {
+        return TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(color)
+            setPadding(0, dp(4), 0, dp(4))
+        }
+    }
+
+    private fun makeEditor(
+        value: String,
+        hintText: String,
+        lines: Int = 4
+    ): EditText {
+        return EditText(this).apply {
+            setText(value)
+            hint = hintText
+            setTextColor(Color.WHITE)
+            setHintTextColor(muted)
+            textSize = 12f
+            gravity = Gravity.TOP or Gravity.START
+            setPadding(dp(10), dp(9), dp(10), dp(9))
+            background = rounded(surface2)
+            minLines = lines
+            typeface = Typeface.MONOSPACE
         }
     }
 
     private fun buildInterface() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-            fitsSystemWindows = true
+            setBackgroundColor(bg)
         }
 
-        val toolbar = LinearLayout(this).apply {
+        toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(6), dp(4), dp(6), dp(4))
-            setBackgroundColor(Color.rgb(242, 244, 248))
+            setPadding(dp(8), dp(7), dp(8), dp(7))
+            setBackgroundColor(bg)
         }
 
         address = EditText(this).apply {
             hint = "Search or enter website"
-            isSingleLine = true
-            textSize = 14f
-            setPadding(dp(10), 0, dp(10), 0)
-            setBackground(roundedBackground(Color.WHITE))
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_GO
+            textSize = 13f
+            singleLine = true
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setTextColor(textColor)
+            setHintTextColor(muted)
+            setPadding(dp(13), 0, dp(10), 0)
+            background = rounded(surface2, Color.rgb(62, 75, 96), 22)
+
             setOnEditorActionListener { _, _, _ ->
                 loadAddress()
                 true
@@ -134,97 +216,26 @@ class MainActivity : Activity() {
 
         toolbar.addView(
             address,
-            LinearLayout.LayoutParams(0, dp(44), 1f)
+            LinearLayout.LayoutParams(0, dp(43), 1f)
         )
-        toolbar.addView(button("GO") { loadAddress() })
-        toolbar.addView(button("⋮") { showMenu() })
 
-        val navigation = LinearLayout(this).apply {
+        toolbar.addView(makeButton("GO") { loadAddress() })
+        toolbar.addView(makeButton("⋮") { showMenu() })
+
+        tabStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(Color.rgb(248, 248, 250))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(5), dp(4), dp(5), dp(4))
+            setBackgroundColor(surface)
         }
 
-        navigation.addView(button("←") {
-            if (webView.canGoBack()) webView.goBack()
-        })
-
-        navigation.addView(button("→") {
-            if (webView.canGoForward()) webView.goForward()
-        })
-
-        navigation.addView(button("↻") { webView.reload() })
-
-        navigation.addView(button("Home") {
-            webView.loadUrl("https://www.google.com")
-        })
-
-        status = TextView(this).apply {
-            text = "Ready"
-            textSize = 11f
-            setTextColor(Color.DKGRAY)
-            setPadding(dp(9), dp(5), dp(9), dp(5))
-            setBackgroundColor(Color.rgb(235, 237, 241))
+        webContainer = FrameLayout(this).apply {
+            setBackgroundColor(Color.WHITE)
         }
 
-        webView = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.allowFileAccess = false
-            settings.allowContentAccess = false
-
-            webViewClient = object : WebViewClient() {
-                override fun onPageStarted(
-                    view: WebView?,
-                    url: String?,
-                    favicon: android.graphics.Bitmap?
-                ) {
-                    status.text = "Loading website..."
-                    selectedHtml = ""
-                    selectedInlineCss = ""
-                    selectedComputedCss = ""
-                    selectedSelector = ""
-                    domNodes = JSONArray()
-                }
-
-                override fun onPageFinished(
-                    view: WebView?,
-                    url: String?
-                ) {
-                    address.setText(url ?: "")
-                    status.text = "Website loaded"
-                    prefs.edit().putString("last_url", url).apply()
-                    installInspector()
-                }
-            }
-
-            webChromeClient = object : WebChromeClient() {
-                override fun onConsoleMessage(
-                    message: ConsoleMessage
-                ): Boolean {
-                    val line = message.message()
-
-                    if (line.startsWith("__DEVBROWSER__")) {
-                        try {
-                            val data = JSONObject(
-                                line.removePrefix("__DEVBROWSER__")
-                            )
-                            handleInspectorData(data)
-                        } catch (_: Exception) {
-                            appendConsole("Inspector data error")
-                        }
-                    } else {
-                        val level = when (message.messageLevel()) {
-                            ConsoleMessage.MessageLevel.ERROR -> "ERROR"
-                            ConsoleMessage.MessageLevel.WARNING -> "WARN"
-                            else -> "LOG"
-                        }
-                        appendConsole("[$level] $line")
-                    }
-
-                    return true
-                }
-            }
+        status = makeLabel("Ready", 10f, muted).apply {
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            setBackgroundColor(surface)
         }
 
         devPanel = LinearLayout(this).apply {
@@ -234,35 +245,262 @@ class MainActivity : Activity() {
         }
 
         root.addView(toolbar)
-        root.addView(navigation)
-        root.addView(status)
-
         root.addView(
-            webView,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
+            tabStrip,
+            LinearLayout.LayoutParams(-1, dp(43))
         )
 
         root.addView(
+            webContainer,
+            LinearLayout.LayoutParams(-1, 0, 1f)
+        )
+
+        root.addView(status)
+        root.addView(
             devPanel,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(panelHeight)
-            )
+            LinearLayout.LayoutParams(-1, dp(panelHeight))
         )
 
         setContentView(root)
     }
 
+    private fun createTab(
+        url: String,
+        load: Boolean = true
+    ) {
+        if (tabs.size >= 8) {
+            Toast.makeText(
+                this,
+                "Maximum 8 tabs allowed",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val web = WebView(this)
+
+        web.settings.javaScriptEnabled = true
+        web.settings.domStorageEnabled = true
+        web.settings.allowFileAccess = false
+        web.settings.allowContentAccess = false
+        web.settings.loadsImagesAutomatically = true
+        web.settings.javaScriptCanOpenWindowsAutomatically = false
+
+        web.webViewClient = object : WebViewClient() {
+
+            override fun onPageStarted(
+                view: WebView?,
+                url: String?,
+                favicon: android.graphics.Bitmap?
+            ) {
+                if (view === activeWeb) {
+                    status.text = "Loading website..."
+                }
+            }
+
+            override fun onPageFinished(
+                view: WebView?,
+                url: String?
+            ) {
+                val item = tabs.firstOrNull { it.web === view }
+                    ?: return
+
+                item.url = url ?: item.url
+                item.title = view?.title ?: item.title
+
+                if (item.id == activeTabId) {
+                    address.setText(item.url)
+                    status.text = "Page loaded"
+                }
+
+                saveSession()
+                renderBrowserTabs()
+                installInspector(view)
+            }
+        }
+
+        web.webChromeClient = object : WebChromeClient() {
+
+            override fun onReceivedTitle(
+                view: WebView?,
+                title: String?
+            ) {
+                val item = tabs.firstOrNull { it.web === view }
+                    ?: return
+
+                item.title = title ?: item.title
+
+                if (item.id == activeTabId) {
+                    renderBrowserTabs()
+                }
+            }
+
+            override fun onConsoleMessage(
+                message: ConsoleMessage
+            ): Boolean {
+                val line = message.message()
+
+                if (line.startsWith("__DEVBROWSER__")) {
+                    try {
+                        handleInspectorData(
+                            JSONObject(
+                                line.removePrefix("__DEVBROWSER__")
+                            )
+                        )
+                    } catch (_: Exception) {
+                        appendConsole("Inspector data error")
+                    }
+                } else {
+                    val level = when (message.messageLevel()) {
+                        ConsoleMessage.MessageLevel.ERROR -> "ERROR"
+                        ConsoleMessage.MessageLevel.WARNING -> "WARN"
+                        else -> "LOG"
+                    }
+
+                    appendConsole("[$level] $line")
+                }
+
+                return true
+            }
+        }
+
+        val item = BrowserTab(
+            id = nextTabId++,
+            web = web,
+            title = "New tab",
+            url = url
+        )
+
+        tabs.add(item)
+        activeTabId = item.id
+
+        switchTab(item.id)
+
+        if (load) web.loadUrl(url)
+
+        saveSession()
+    }
+
+    private fun switchTab(id: Int) {
+        val item = tabs.firstOrNull { it.id == id } ?: return
+
+        activeTabId = id
+
+        webContainer.removeAllViews()
+
+        (item.web.parent as? ViewGroup)?.removeView(item.web)
+
+        webContainer.addView(
+            item.web,
+            FrameLayout.LayoutParams(-1, -1)
+        )
+
+        address.setText(item.web.url ?: item.url)
+        status.text = "Ready"
+
+        renderBrowserTabs()
+        saveSession()
+    }
+
+    private fun closeTab(id: Int) {
+        val index = tabs.indexOfFirst { it.id == id }
+        if (index == -1) return
+
+        val item = tabs[index]
+
+        webContainer.removeView(item.web)
+        item.web.stopLoading()
+        item.web.destroy()
+        tabs.removeAt(index)
+
+        if (tabs.isEmpty()) {
+            createTab("https://www.google.com")
+        } else {
+            val nextIndex = (index - 1).coerceAtLeast(0)
+            switchTab(tabs[nextIndex].id)
+        }
+
+        saveSession()
+    }
+
+    private fun renderBrowserTabs() {
+        tabStrip.removeAllViews()
+
+        tabs.forEach { item ->
+            val selected = item.id == activeTabId
+
+            val tab = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(9), dp(5), dp(5), dp(5))
+                background = rounded(
+                    if (selected) Color.rgb(48, 65, 91) else surface2,
+                    if (selected) accent else Color.TRANSPARENT,
+                    10
+                )
+            }
+
+            val title = TextView(this).apply {
+                text = item.title.take(13)
+                textSize = 11f
+                setTextColor(if (selected) Color.WHITE else muted)
+                maxWidth = dp(110)
+                setOnClickListener { switchTab(item.id) }
+            }
+
+            val close = TextView(this).apply {
+                text = " × "
+                textSize = 15f
+                setTextColor(muted)
+                setPadding(dp(5), 0, dp(3), 0)
+                setOnClickListener { closeTab(item.id) }
+            }
+
+            tab.addView(title)
+            tab.addView(close)
+
+            tabStrip.addView(
+                tab,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(34)
+                ).apply {
+                    setMargins(dp(3), 0, dp(3), 0)
+                }
+            )
+        }
+
+        tabStrip.addView(makeButton("+") {
+            createTab("https://www.google.com")
+        })
+    }
+
+    private fun saveSession() {
+        val array = JSONArray()
+
+        tabs.forEach {
+            array.put(it.web.url ?: it.url)
+        }
+
+        prefs.edit()
+            .putString("saved_tabs", array.toString())
+            .putInt(
+                "active_tab_index",
+                tabs.indexOfFirst { it.id == activeTabId }
+                    .coerceAtLeast(0)
+            )
+            .putString("last_dev_tab", currentTab)
+            .putInt("panel_height", panelHeight)
+            .apply()
+    }
+
     private fun loadAddress() {
         var url = address.text.toString().trim()
-        if (url.isEmpty()) return
+        if (url.isBlank()) return
 
-        if (!url.startsWith("http://") &&
-            !url.startsWith("https://")) {
+        if (!url.startsWith("https://") &&
+            !url.startsWith("http://")) {
+
             url = if (url.contains(".") && !url.contains(" ")) {
                 "https://$url"
             } else {
@@ -272,21 +510,23 @@ class MainActivity : Activity() {
         }
 
         val keyboard = getSystemService(INPUT_METHOD_SERVICE)
-                as InputMethodManager
+            as InputMethodManager
+
         keyboard.hideSoftInputFromWindow(address.windowToken, 0)
 
-        webView.loadUrl(url)
+        activeWeb?.loadUrl(url)
     }
 
     private fun showMenu() {
         val options = arrayOf(
+            "New tab",
             "Open DevTools",
             "Inspect Element",
             "Elements",
             "Styles",
             "Console",
             "Close DevTools",
-            "Reload Page",
+            "Reload",
             "Tutorial"
         )
 
@@ -294,17 +534,18 @@ class MainActivity : Activity() {
             .setTitle("DevBrowser")
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> showDevTools("Elements")
-                    1 -> {
+                    0 -> createTab("https://www.google.com")
+                    1 -> showDevTools("Elements")
+                    2 -> {
                         showDevTools("Elements")
                         toggleInspect(true)
                     }
-                    2 -> showDevTools("Elements")
-                    3 -> showDevTools("Styles")
-                    4 -> showDevTools("Console")
-                    5 -> closeDevTools()
-                    6 -> webView.reload()
-                    7 -> showTutorial()
+                    3 -> showDevTools("Elements")
+                    4 -> showDevTools("Styles")
+                    5 -> showDevTools("Console")
+                    6 -> closeDevTools()
+                    7 -> activeWeb?.reload()
+                    8 -> showTutorial()
                 }
             }
             .show()
@@ -314,98 +555,56 @@ class MainActivity : Activity() {
         currentTab = tab
         devPanel.visibility = View.VISIBLE
         renderPanel()
-        saveSettings()
+        saveSession()
     }
 
     private fun closeDevTools() {
         devPanel.visibility = View.GONE
         toggleInspect(false)
-        saveSettings()
-    }
-
-    private fun saveSettings() {
-        prefs.edit()
-            .putString("last_tab", currentTab)
-            .putInt("panel_height", panelHeight)
-            .apply()
-    }
-
-    private fun buildTabs(): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.rgb(39, 42, 49))
-
-            listOf("Elements", "Styles", "Console").forEach { tab ->
-                val item = TextView(this@MainActivity).apply {
-                    text = if (tab == currentTab) "● $tab" else tab
-                    textSize = 13f
-                    typeface = Typeface.DEFAULT_BOLD
-                    setTextColor(
-                        if (tab == currentTab) accent else Color.LTGRAY
-                    )
-                    setPadding(dp(13), dp(13), dp(13), dp(13))
-                    setOnClickListener {
-                        currentTab = tab
-                        renderPanel()
-                        saveSettings()
-                    }
-                }
-                addView(item)
-            }
-
-            val close = TextView(this@MainActivity).apply {
-                text = "✕"
-                textSize = 17f
-                gravity = Gravity.CENTER
-                setTextColor(Color.WHITE)
-                setOnClickListener { closeDevTools() }
-            }
-
-            addView(
-                close,
-                LinearLayout.LayoutParams(0, -1, 1f)
-            )
-        }
+        saveSession()
     }
 
     private fun buildDragHandle(): View {
         return View(this).apply {
-            setBackgroundColor(Color.rgb(70, 74, 84))
-            minimumHeight = dp(12)
+            minimumHeight = dp(13)
+            setBackgroundColor(Color.rgb(73, 83, 101))
+            contentDescription = "Drag to resize DevTools"
 
-            setOnTouchListener { view, event ->
+            var startY = 0f
+            var startHeight = panelHeight
+
+            setOnTouchListener { _, event ->
                 when (event.action) {
-                    MotionEvent.ACTION_DOWN -> true
+                    MotionEvent.ACTION_DOWN -> {
+                        startY = event.rawY
+                        startHeight = panelHeight
+                        true
+                    }
 
                     MotionEvent.ACTION_MOVE -> {
-                        val params = devPanel.layoutParams
-                            as LinearLayout.LayoutParams
+                        val delta = (
+                            (startY - event.rawY) /
+                                resources.displayMetrics.density
+                        ).toInt()
 
-                        val screenDp =
-                            (resources.displayMetrics.heightPixels /
-                                resources.displayMetrics.density).toInt()
+                        val screenDp = (
+                            resources.displayMetrics.heightPixels /
+                                resources.displayMetrics.density
+                        ).toInt()
 
-                        val newHeight = min(
-                            max(
-                                panelHeight - (event.rawY /
-                                    resources.displayMetrics.density).toInt() +
-                                    (view.tag as? Int ?: 0),
-                                190
-                            ),
-                            max(220, screenDp - 190)
-                        )
+                        panelHeight = (startHeight + delta)
+                            .coerceIn(190, max(190, screenDp - 180))
 
-                        params.height = dp(newHeight)
-                        devPanel.layoutParams = params
-                        panelHeight = newHeight
-                        view.tag = event.rawY.toInt()
+                        devPanel.layoutParams =
+                            devPanel.layoutParams.apply {
+                                height = dp(panelHeight)
+                            }
+
                         true
                     }
 
                     MotionEvent.ACTION_UP -> {
-                        view.tag = null
-                        saveSettings()
+                        saveSession()
                         true
                     }
 
@@ -418,12 +617,51 @@ class MainActivity : Activity() {
     private fun renderPanel() {
         devPanel.removeAllViews()
         devPanel.addView(buildDragHandle())
-        devPanel.addView(buildTabs())
+
+        val tabsBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(surface)
+        }
+
+        listOf("Elements", "Styles", "Console").forEach { tab ->
+            val item = TextView(this).apply {
+                text = if (tab == currentTab) "● $tab" else tab
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (tab == currentTab) accent else muted)
+                setPadding(dp(13), dp(13), dp(13), dp(13))
+
+                setOnClickListener {
+                    currentTab = tab
+                    renderPanel()
+                    saveSession()
+                }
+            }
+
+            tabsBar.addView(item)
+        }
+
+        val close = TextView(this).apply {
+            text = "✕"
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setTextColor(muted)
+            setPadding(dp(10), dp(8), dp(12), dp(8))
+            setOnClickListener { closeDevTools() }
+        }
+
+        tabsBar.addView(
+            close,
+            LinearLayout.LayoutParams(0, -1, 1f)
+        )
+
+        devPanel.addView(tabsBar)
 
         panelBody = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            setBackgroundColor(panelBg)
+            setPadding(dp(11), dp(9), dp(11), dp(12))
+            setBackgroundColor(bg)
         }
 
         val scroll = ScrollView(this)
@@ -441,110 +679,77 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun label(
-        value: String,
-        size: Float = 12f
-    ): TextView {
-        return TextView(this).apply {
-            text = value
-            textSize = size
-            setTextColor(textColor)
-            setPadding(0, dp(4), 0, dp(4))
-        }
-    }
-
-    private fun editor(
-        value: String,
-        hintText: String,
-        lines: Int = 5
-    ): EditText {
-        return EditText(this).apply {
-            setText(value)
-            hint = hintText
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.LTGRAY)
-            textSize = 12f
-            gravity = Gravity.TOP or Gravity.START
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setBackground(roundedBackground(Color.rgb(43, 46, 53)))
-            minLines = lines
-        }
-    }
-
     private fun renderElements() {
-        panelBody.addView(label("ELEMENTS · DOM TREE"))
+        panelBody.addView(
+            makeLabel("ELEMENTS  /  DOM INSPECTOR", 11f, accent)
+        )
 
-        val pickButton = button(
-            if (inspectEnabled) "Stop picking" else "Pick Element"
+        panelBody.addView(makeButton(
+            if (inspectEnabled) "Stop picking" else "⌖  Pick Element"
         ) {
             toggleInspect(!inspectEnabled)
             renderPanel()
-        }
-
-        panelBody.addView(pickButton)
+        })
 
         panelBody.addView(
-            label(
+            makeLabel(
                 if (inspectEnabled) {
-                    "PICK MODE ON · Tap an element on the webpage"
+                    "Pick mode active — tap an element on the webpage."
                 } else {
-                    "Tap a DOM row or Pick Element on the webpage"
+                    "Select a DOM row or use Pick Element."
                 },
-                11f
+                10f,
+                muted
             )
         )
 
-        val treeContainer = LinearLayout(this).apply {
+        val tree = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(7), dp(7), dp(7), dp(7))
-            setBackground(roundedBackground(Color.rgb(25, 27, 32)))
+            background = rounded(surface)
         }
 
         if (domNodes.length() == 0) {
-            treeContainer.addView(
-                label("Load a website to inspect its DOM.", 11f)
-            )
+            tree.addView(makeLabel("No DOM data yet. Load a website.", 11f))
         } else {
             for (i in 0 until domNodes.length()) {
                 val node = domNodes.optJSONObject(i) ?: continue
-                val nodeLabel = node.optString("label", "element")
                 val path = node.optJSONArray("path") ?: JSONArray()
                 val depth = node.optInt("depth", 0)
                 val selected = node.optBoolean("selected", false)
 
                 val row = TextView(this).apply {
-                    text = (if (selected) "▶ " else "  ") + nodeLabel
+                    text = (if (selected) "▶ " else "  ") +
+                        node.optString("label", "element")
+
                     textSize = 11f
                     typeface = Typeface.MONOSPACE
-                    setTextColor(
-                        if (selected) accent else textColor
-                    )
+                    setTextColor(if (selected) orange else textColor)
                     setPadding(
-                        dp(6 + depth * 12),
-                        dp(6),
-                        dp(6),
-                        dp(6)
+                        dp(5 + depth * 12),
+                        dp(7),
+                        dp(5),
+                        dp(7)
                     )
-                    isClickable = true
 
                     if (selected) {
-                        setBackground(
-                            roundedBackground(Color.rgb(66, 49, 30))
+                        background = rounded(
+                            Color.rgb(68, 48, 29)
                         )
                     }
 
                     setOnClickListener {
                         val pathJson = path.toString()
 
-                        webView.evaluateJavascript(
+                        activeWeb?.evaluateJavascript(
                             """
                             (function(){
                                 let el = document.body;
                                 const path = $pathJson;
 
-                                for (const index of path) {
-                                    if (!el || !el.children[index]) return;
-                                    el = el.children[index];
+                                for (const i of path) {
+                                    if (!el || !el.children[i]) return;
+                                    el = el.children[i];
                                 }
 
                                 if (el) {
@@ -558,23 +763,23 @@ class MainActivity : Activity() {
                     }
                 }
 
-                treeContainer.addView(row)
+                tree.addView(row)
             }
         }
 
         val treeScroll = ScrollView(this)
-        treeScroll.addView(treeContainer)
+        treeScroll.addView(tree)
 
         panelBody.addView(
             treeScroll,
-            LinearLayout.LayoutParams(-1, dp(155))
+            LinearLayout.LayoutParams(-1, dp(150))
         )
 
-        panelBody.addView(label("SELECTED ELEMENT · HTML"))
+        panelBody.addView(makeLabel("SELECTED HTML", 11f, accent))
 
-        val htmlInput = editor(
+        val htmlInput = makeEditor(
             selectedHtml,
-            "Pick an element to load its HTML.",
+            "Select an element to load its HTML.",
             5
         )
 
@@ -583,36 +788,23 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(-1, dp(115))
         )
 
-        val actions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        actions.addView(button("Apply HTML") {
-            if (selectedHtml.isEmpty()) {
+        panelBody.addView(makeButton("Apply HTML") {
+            if (selectedSelector.isBlank()) {
                 status.text = "Select an element first"
             } else {
-                val quoted = JSONObject.quote(
+                val html = JSONObject.quote(
                     htmlInput.text.toString()
                 )
 
-                webView.evaluateJavascript(
+                activeWeb?.evaluateJavascript(
                     """
                     (function(){
-                        const old = window.__devSelected;
-                        if (!old) return;
+                        const el = window.__devSelected;
+                        if (!el) return;
 
-                        const box = document.createElement('div');
-                        box.innerHTML = $quoted;
-
-                        if (box.children.length === 1) {
-                            const next = box.firstElementChild;
-                            old.replaceWith(next);
-                            window.__devHighlight(next);
-                            window.__devSendSelection(next);
-                        } else {
-                            old.innerHTML = box.innerHTML;
-                            window.__devSendSelection(old);
-                        }
+                        el.innerHTML = $html;
+                        window.__devHighlight(el);
+                        window.__devSendSelection(el);
                     })();
                     """.trimIndent(),
                     null
@@ -620,76 +812,74 @@ class MainActivity : Activity() {
             }
         })
 
-        actions.addView(button("Refresh DOM") {
-            webView.evaluateJavascript(
+        panelBody.addView(makeButton("Refresh DOM") {
+            activeWeb?.evaluateJavascript(
                 "window.__devSendSelection(window.__devSelected || document.body);",
                 null
             )
         })
-
-        panelBody.addView(actions)
     }
 
     private fun renderStyles() {
-        panelBody.addView(label("STYLES · CSS INSPECTOR"))
+        panelBody.addView(
+            makeLabel("STYLES  /  CSS INSPECTOR", 11f, accent)
+        )
 
         panelBody.addView(
-            label(
-                selectedSelector.ifEmpty {
+            makeLabel(
+                selectedSelector.ifBlank {
                     "Select an element to inspect its styles."
                 },
                 12f
             )
         )
 
-        panelBody.addView(label("CSS BOX MODEL"))
+        panelBody.addView(makeLabel("BOX MODEL", 11f, accent))
 
-        val boxModel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setBackground(roundedBackground(Color.rgb(25, 27, 32)))
-        }
-
-        val boxData = try {
-            JSONObject(
-                webViewBoxModel.ifEmpty { "{}" }
-            )
+        val box = try {
+            JSONObject(boxModelJson)
         } catch (_: Exception) {
             JSONObject()
         }
 
-        val margin = boxData.optString("margin", "—")
-        val border = boxData.optString("border", "—")
-        val padding = boxData.optString("padding", "—")
-        val content = boxData.optString("content", "—")
+        val boxView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = rounded(surface)
+        }
 
-        boxModel.addView(
-            boxLayer("MARGIN", margin, Color.rgb(100, 75, 32))
-        )
-        boxModel.addView(
-            boxLayer("BORDER", border, Color.rgb(130, 85, 35))
-        )
-        boxModel.addView(
-            boxLayer("PADDING", padding, Color.rgb(55, 95, 65))
-        )
-        boxModel.addView(
-            boxLayer("CONTENT", content, Color.rgb(45, 75, 125))
+        boxView.addView(
+            boxLayer("MARGIN", box.optString("margin", "—"),
+                Color.rgb(107, 77, 37))
         )
 
-        panelBody.addView(boxModel)
+        boxView.addView(
+            boxLayer("BORDER", box.optString("border", "—"),
+                Color.rgb(137, 89, 39))
+        )
 
-        panelBody.addView(label("COMPUTED CSS"))
+        boxView.addView(
+            boxLayer("PADDING", box.optString("padding", "—"),
+                Color.rgb(48, 91, 64))
+        )
 
-        val computed = label(
-            selectedComputedCss.ifEmpty {
-                "No element selected."
-            },
+        boxView.addView(
+            boxLayer("CONTENT", box.optString("content", "—"),
+                Color.rgb(42, 75, 124))
+        )
+
+        panelBody.addView(boxView)
+
+        panelBody.addView(makeLabel("COMPUTED CSS", 11f, accent))
+
+        val computed = makeLabel(
+            selectedComputedCss.ifBlank { "No element selected." },
             11f
         ).apply {
             typeface = Typeface.MONOSPACE
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setBackground(roundedBackground(Color.rgb(25, 27, 32)))
+            setPadding(dp(9), dp(9), dp(9), dp(9))
+            background = rounded(surface)
         }
 
         panelBody.addView(
@@ -697,9 +887,9 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(-1, dp(125))
         )
 
-        panelBody.addView(label("INLINE CSS · EDITABLE"))
+        panelBody.addView(makeLabel("INLINE CSS · EDITABLE", 11f, accent))
 
-        val cssInput = editor(
+        val cssInput = makeEditor(
             selectedInlineCss,
             "Select an element to load its CSS.",
             4
@@ -710,21 +900,20 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(-1, dp(100))
         )
 
-        panelBody.addView(button("Apply CSS") {
-            if (selectedSelector.isEmpty()) {
+        panelBody.addView(makeButton("Apply CSS") {
+            if (selectedSelector.isBlank()) {
                 status.text = "Select an element first"
             } else {
-                val css = JSONObject.quote(
-                    cssInput.text.toString()
-                )
+                val css = JSONObject.quote(cssInput.text.toString())
 
-                webView.evaluateJavascript(
+                activeWeb?.evaluateJavascript(
                     """
                     (function(){
-                        if (window.__devSelected) {
-                            window.__devSelected.style.cssText = $css;
-                            window.__devSendSelection(window.__devSelected);
-                        }
+                        const el = window.__devSelected;
+                        if (!el) return;
+
+                        el.style.cssText = $css;
+                        window.__devSendSelection(el);
                     })();
                     """.trimIndent(),
                     null
@@ -732,8 +921,6 @@ class MainActivity : Activity() {
             }
         })
     }
-
-    private var webViewBoxModel = ""
 
     private fun boxLayer(
         title: String,
@@ -746,10 +933,11 @@ class MainActivity : Activity() {
             textSize = 11f
             typeface = Typeface.MONOSPACE
             setTextColor(Color.WHITE)
-            setPadding(dp(10), dp(9), dp(10), dp(9))
-            setBackground(roundedBackground(color))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = rounded(color)
+
             layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
+                -1,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
                 setMargins(0, dp(3), 0, dp(3))
@@ -758,16 +946,18 @@ class MainActivity : Activity() {
     }
 
     private fun renderConsole() {
-        panelBody.addView(label("CONSOLE · JavaScript"))
+        panelBody.addView(
+            makeLabel("CONSOLE  /  JAVASCRIPT", 11f, accent)
+        )
 
-        consoleOutput = label(
+        consoleOutput = makeLabel(
             consoleHistory.joinToString("\n")
-                .ifEmpty { "DevBrowser console ready." },
+                .ifBlank { "DevBrowser console ready." },
             11f
         ).apply {
             typeface = Typeface.MONOSPACE
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setBackground(roundedBackground(Color.rgb(18, 20, 24)))
+            setPadding(dp(9), dp(9), dp(9), dp(9))
+            background = rounded(Color.rgb(12, 15, 20))
         }
 
         panelBody.addView(
@@ -775,9 +965,9 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(-1, dp(145))
         )
 
-        val command = editor(
+        val command = makeEditor(
             "",
-            "Enter JavaScript and tap Run...",
+            "Enter JavaScript here...",
             2
         )
 
@@ -786,7 +976,7 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(-1, dp(75))
         )
 
-        panelBody.addView(button("▶ Run JavaScript") {
+        panelBody.addView(makeButton("▶  Run JavaScript") {
             val source = command.text.toString()
 
             if (source.isNotBlank()) {
@@ -794,19 +984,19 @@ class MainActivity : Activity() {
 
                 val quoted = JSONObject.quote(source)
 
-                webView.evaluateJavascript(
+                activeWeb?.evaluateJavascript(
                     """
                     (function(){
                         try {
-                            let value = (0, eval)($quoted);
+                            const result = (0, eval)($quoted);
 
-                            if (value === undefined) return "undefined";
+                            if (result === undefined) return "undefined";
 
-                            if (typeof value === "object" && value !== null) {
-                                return JSON.stringify(value, null, 2);
+                            if (typeof result === "object" && result !== null) {
+                                return JSON.stringify(result, null, 2);
                             }
 
-                            return String(value);
+                            return String(result);
                         } catch(e) {
                             return "Error: " + (e.stack || e);
                         }
@@ -818,12 +1008,13 @@ class MainActivity : Activity() {
                     } catch (_: Exception) {
                         result ?: "undefined"
                     }
+
                     appendConsole(output)
                 }
             }
         })
 
-        panelBody.addView(button("Clear console") {
+        panelBody.addView(makeButton("Clear console") {
             consoleHistory.clear()
             consoleOutput?.text = "Console cleared."
         })
@@ -833,7 +1024,7 @@ class MainActivity : Activity() {
         runOnUiThread {
             consoleHistory.add(line)
 
-            if (consoleHistory.size > 150) {
+            if (consoleHistory.size > 200) {
                 consoleHistory.removeAt(0)
             }
 
@@ -849,12 +1040,12 @@ class MainActivity : Activity() {
             selectedInlineCss = data.optString("inlineCss", "")
             selectedComputedCss = data.optString("computedCss", "")
             selectedSelector = data.optString("selector", "")
-            webViewBoxModel = data.optString("boxModel", "")
+            boxModelJson = data.optString("boxModel", "{}")
 
-            status.text = if (selectedSelector.isNotEmpty()) {
+            status.text = if (selectedSelector.isNotBlank()) {
                 "Selected: $selectedSelector"
             } else {
-                "Website loaded"
+                "Page loaded"
             }
 
             if (devPanel.visibility == View.VISIBLE &&
@@ -864,7 +1055,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun installInspector() {
+    private fun installInspector(view: WebView?) {
+        if (view == null) return
+
         val script = """
         (function(){
 
@@ -879,22 +1072,27 @@ class MainActivity : Activity() {
             window.__devInspect = false;
             window.__devSelected = null;
             window.__devPreviousOutline = null;
-            window.__devPreviousOutlineOutline = "";
+            window.__devOldOutline = "";
+            window.__devOldOffset = "";
 
             window.__devHighlight = function(el) {
                 if (!el) return;
 
                 if (window.__devPreviousOutline) {
                     window.__devPreviousOutline.style.outline =
-                        window.__devPreviousOutlineOutline || "";
+                        window.__devOldOutline;
+
+                    window.__devPreviousOutline.style.outlineOffset =
+                        window.__devOldOffset;
                 }
 
                 window.__devPreviousOutline = el;
-                window.__devPreviousOutlineOutline =
-                    el.style.outline || "";
+                window.__devOldOutline = el.style.outline || "";
+                window.__devOldOffset = el.style.outlineOffset || "";
 
                 el.style.outline = "2px solid #ff5722";
                 el.style.outlineOffset = "2px";
+
                 window.__devSelected = el;
             };
 
@@ -914,7 +1112,7 @@ class MainActivity : Activity() {
             }
 
             function treeData() {
-                let nodes = [];
+                const nodes = [];
                 let count = 0;
 
                 function walk(node, depth, path) {
@@ -996,13 +1194,13 @@ class MainActivity : Activity() {
         })();
         """.trimIndent()
 
-        webView.evaluateJavascript(script, null)
+        view.evaluateJavascript(script, null)
     }
 
     private fun toggleInspect(enabled: Boolean) {
         inspectEnabled = enabled
 
-        webView.evaluateJavascript(
+        activeWeb?.evaluateJavascript(
             "window.__devInspect = $enabled;",
             null
         )
@@ -1016,24 +1214,26 @@ class MainActivity : Activity() {
 
     private fun showTutorial() {
         val steps = arrayOf(
-            "Welcome to DevBrowser!\n\nThis browser includes developer tools for inspecting and testing webpages.",
-            "1. Open a website\n\nUse the address bar at the top to open a website or search the web.",
-            "2. Inspect Element\n\nOpen the ⋮ menu, choose Inspect Element, then tap an element on the webpage. It will be outlined in orange.",
-            "3. Elements tab\n\nThe DOM tree shows webpage elements. Tap a row to select it. You can edit the selected HTML.",
-            "4. Styles tab\n\nSee computed CSS, the visual Box Model, and edit inline CSS.",
-            "5. Console tab\n\nEnter JavaScript and press Run JavaScript to test code on the currently open page.",
-            "6. Resize DevTools\n\nDrag the small handle above the DevTools tabs to change the panel height.\n\nYour last opened page is saved for the next launch."
+            "Welcome to DevBrowser!\n\nA browser with built-in webpage developer tools.",
+            "ADDRESS BAR\n\nEnter a website or search term in the top address bar.",
+            "BROWSER TABS\n\nUse + to open a new tab. Tap a tab to switch or × to close it.",
+            "INSPECT ELEMENT\n\nOpen the menu and choose Inspect Element. Tap an element on the webpage.",
+            "ELEMENTS\n\nExplore the DOM tree and edit selected HTML.",
+            "STYLES\n\nInspect computed CSS, view the Box Model and edit inline CSS.",
+            "CONSOLE\n\nEnter JavaScript and run it on the current webpage.",
+            "RESIZE DEVTOOLS\n\nDrag the handle above the DevTools tabs to resize the panel.",
+            "SESSION\n\nYour open tab URLs are saved and restored when the app starts again."
         )
 
         var index = 0
 
         fun showStep() {
             val builder = AlertDialog.Builder(this)
-                .setTitle("DevBrowser Tutorial")
+                .setTitle("DevBrowser Tutorial · ${index + 1}/${steps.size}")
                 .setMessage(steps[index])
                 .setCancelable(false)
 
-            if (index == 2) {
+            if (index == 3) {
                 builder.setNeutralButton("Try Inspect") { _, _ ->
                     showDevTools("Elements")
                     toggleInspect(true)
@@ -1043,7 +1243,9 @@ class MainActivity : Activity() {
             builder.setNegativeButton(
                 if (index == 0) "Skip" else "Close"
             ) { _, _ ->
-                prefs.edit().putBoolean("show_tutorial", false).apply()
+                prefs.edit()
+                    .putBoolean("show_tutorial", false)
+                    .apply()
             }
 
             builder.setPositiveButton(
@@ -1056,6 +1258,7 @@ class MainActivity : Activity() {
                     prefs.edit()
                         .putBoolean("show_tutorial", false)
                         .apply()
+
                     showDevTools("Elements")
                 }
             }
@@ -1066,41 +1269,35 @@ class MainActivity : Activity() {
         showStep()
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-
-        if (::webView.isInitialized) {
-            webView.saveState(outState)
-        }
-
-        saveSettings()
-    }
-
     override fun onPause() {
-        if (::webView.isInitialized) {
-            val currentUrl = webView.url
-            if (!currentUrl.isNullOrBlank()) {
-                prefs.edit().putString("last_url", currentUrl).apply()
-            }
-        }
-
-        saveSettings()
+        saveSession()
         super.onPause()
     }
 
     override fun onDestroy() {
-        if (::webView.isInitialized) {
-            webView.stopLoading()
-            webView.destroy()
+        tabs.forEach {
+            try {
+                (it.web.parent as? ViewGroup)?.removeView(it.web)
+                it.web.stopLoading()
+                it.web.destroy()
+            } catch (_: Exception) {
+            }
         }
 
+        tabs.clear()
         super.onDestroy()
     }
 
     @Deprecated("Deprecated in Android")
     override fun onBackPressed() {
-        if (::webView.isInitialized && webView.canGoBack()) {
-            webView.goBack()
+        val web = activeWeb
+
+        if (devPanel.visibility == View.VISIBLE) {
+            closeDevTools()
+        } else if (web?.canGoBack() == true) {
+            web.goBack()
+        } else if (tabs.size > 1) {
+            closeTab(activeTabId)
         } else {
             super.onBackPressed()
         }
