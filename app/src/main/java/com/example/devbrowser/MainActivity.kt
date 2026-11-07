@@ -196,7 +196,7 @@ class MainActivity : Activity() {
         text = value
         textSize = 14f
         gravity = Gravity.CENTER
-        setTextColor(foreground)
+        setTextColor(this@MainActivity.foreground)
         setPadding(dp(10), dp(8), dp(10), dp(8))
         background = rounded(surface2)
         isClickable = true
@@ -281,7 +281,7 @@ class MainActivity : Activity() {
             textSize = 13f
             isSingleLine = true
             imeOptions = EditorInfo.IME_ACTION_GO
-            setTextColor(foreground)
+            setTextColor(this@MainActivity.foreground)
             setHintTextColor(muted)
             setPadding(dp(12), 0, dp(10), 0)
             background = rounded(surface2, accent, 22)
@@ -969,7 +969,7 @@ class MainActivity : Activity() {
                     textSize = 11f
                     typeface = Typeface.MONOSPACE
                     setTextColor(
-                        if (selected) accent else foreground
+                        if (selected) accent else this@MainActivity.foreground
                     )
 
                     setPadding(
