@@ -1,3 +1,4 @@
+
 package com.example.devbrowser
 
 import android.app.Activity
@@ -17,6 +18,7 @@ import android.view.inputmethod.InputMethodManager
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
@@ -77,9 +79,13 @@ class MainActivity : Activity() {
 
     private val consoleHistory = mutableListOf<String>()
     private var consoleOutput: TextView? = null
+    private var requestSequence = 0
+
+    private val activeTab: BrowserTab?
+        get() = tabs.firstOrNull { it.id == activeTabId }
 
     private val activeWeb: WebView?
-        get() = tabs.firstOrNull { it.id == activeTabId }?.web
+        get() = activeTab?.web
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,22 +110,18 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
-    }
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     private fun rounded(
         color: Int,
         stroke: Int = Color.TRANSPARENT,
         radius: Int = 12
-    ): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(radius).toFloat()
-
-            if (stroke != Color.TRANSPARENT) {
-                setStroke(dp(1), stroke)
-            }
+    ) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radius).toFloat()
+        if (stroke != Color.TRANSPARENT) {
+            setStroke(dp(1), stroke)
         }
     }
 
@@ -127,29 +129,33 @@ class MainActivity : Activity() {
         value: String,
         size: Float = 12f,
         color: Int = textColor
-    ): TextView {
-        return TextView(this).apply {
-            text = value
-            textSize = size
-            setTextColor(color)
-            setPadding(0, dp(4), 0, dp(4))
-        }
+    ) = TextView(this).apply {
+        text = value
+        textSize = size
+        setTextColor(color)
+        setPadding(0, dp(4), 0, dp(4))
     }
 
     private fun makeButton(
         value: String,
         action: () -> Unit
-    ): TextView {
-        return TextView(this).apply {
-            text = value
-            textSize = 15f
-            gravity = Gravity.CENTER
-            setTextColor(textColor)
-            setPadding(dp(10), dp(7), dp(10), dp(7))
-            background = rounded(surface2, Color.TRANSPARENT, 10)
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { action() }
+    ) = TextView(this).apply {
+        text = value
+        textSize = 15f
+        gravity = Gravity.CENTER
+        setTextColor(textColor)
+        setPadding(dp(10), dp(7), dp(10), dp(7))
+        background = rounded(surface2)
+        isClickable = true
+        isFocusable = true
+        setOnClickListener {
+            animate().scaleX(0.96f).scaleY(0.96f)
+                .setDuration(65)
+                .withEndAction {
+                    animate().scaleX(1f).scaleY(1f)
+                        .setDuration(75).start()
+                    action()
+                }.start()
         }
     }
 
@@ -157,26 +163,24 @@ class MainActivity : Activity() {
         value: String,
         hintText: String,
         lines: Int = 4
-    ): EditText {
-        return EditText(this).apply {
-            setText(value)
-            hint = hintText
-            setTextColor(Color.WHITE)
-            setHintTextColor(muted)
-            textSize = 12f
-            gravity = Gravity.TOP or Gravity.START
-            setPadding(dp(10), dp(9), dp(10), dp(9))
-            background = rounded(surface2)
-            minLines = lines
-            typeface = Typeface.MONOSPACE
-            isSingleLine = false
-            setHorizontallyScrolling(true)
-        }
+    ) = EditText(this).apply {
+        setText(value)
+        hint = hintText
+        setTextColor(Color.WHITE)
+        setHintTextColor(muted)
+        textSize = 12f
+        gravity = Gravity.TOP or Gravity.START
+        setPadding(dp(10), dp(9), dp(10), dp(9))
+        background = rounded(surface2)
+        minLines = lines
+        typeface = Typeface.MONOSPACE
+        isSingleLine = false
+        setHorizontallyScrolling(true)
     }
 
-    // ---------------------------------------------------------
-    // MAIN INTERFACE
-    // ---------------------------------------------------------
+    // --------------------------------------------------
+    // INTERFACE
+    // --------------------------------------------------
 
     private fun buildInterface() {
         root = LinearLayout(this).apply {
@@ -228,9 +232,7 @@ class MainActivity : Activity() {
                 ) {
                     loadAddress()
                     true
-                } else {
-                    false
-                }
+                } else false
             }
         }
 
@@ -266,19 +268,12 @@ class MainActivity : Activity() {
         }
 
         root.addView(toolbar)
-
-        root.addView(
-            tabStrip,
-            LinearLayout.LayoutParams(-1, dp(43))
-        )
-
+        root.addView(tabStrip, LinearLayout.LayoutParams(-1, dp(43)))
         root.addView(
             webContainer,
             LinearLayout.LayoutParams(-1, 0, 1f)
         )
-
         root.addView(status)
-
         root.addView(
             devPanel,
             LinearLayout.LayoutParams(-1, dp(panelHeight))
@@ -287,12 +282,14 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
-    // ---------------------------------------------------------
-    // WEBVIEW AND TABS
-    // ---------------------------------------------------------
+    // --------------------------------------------------
+    // WEBVIEW
+    // --------------------------------------------------
 
     private fun createWebView(tabId: Int): WebView {
         return WebView(this).apply {
+            setBackgroundColor(Color.WHITE)
+
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -338,8 +335,7 @@ class MainActivity : Activity() {
 
                     item.url = url ?: item.url
                     item.title = view?.title
-                        ?.takeIf { it.isNotBlank() }
-                        ?: item.url
+                        ?.takeIf { it.isNotBlank() } ?: item.url
 
                     if (tabId == activeTabId) {
                         address.setText(item.url)
@@ -352,13 +348,14 @@ class MainActivity : Activity() {
                     view?.postDelayed({
                         if (tabs.any { it.id == tabId }) {
                             installInspector(view)
+                            requestDomFor(tabId, 0)
                         }
-                    }, 250)
+                    }, 200)
                 }
 
                 override fun onReceivedError(
                     view: WebView?,
-                    request: android.webkit.WebResourceRequest?,
+                    request: WebResourceRequest?,
                     error: android.webkit.WebResourceError?
                 ) {
                     if (request?.isForMainFrame == true &&
@@ -378,13 +375,8 @@ class MainActivity : Activity() {
                     val item = tabs.firstOrNull { it.id == tabId }
                         ?: return
 
-                    if (!title.isNullOrBlank()) {
-                        item.title = title
-                    }
-
-                    if (tabId == activeTabId) {
-                        renderTabs()
-                    }
+                    if (!title.isNullOrBlank()) item.title = title
+                    if (tabId == activeTabId) renderTabs()
                 }
 
                 override fun onProgressChanged(
@@ -394,31 +386,32 @@ class MainActivity : Activity() {
                     if (tabId == activeTabId) {
                         status.text = if (newProgress < 100) {
                             "Loading $newProgress%"
-                        } else {
-                            "Page loaded"
-                        }
+                        } else "Page loaded"
                     }
                 }
 
                 override fun onConsoleMessage(
                     message: ConsoleMessage
                 ): Boolean {
-                    val level = when (message.messageLevel()) {
-                        ConsoleMessage.MessageLevel.ERROR -> "ERROR"
-                        ConsoleMessage.MessageLevel.WARNING -> "WARN"
-                        ConsoleMessage.MessageLevel.DEBUG -> "DEBUG"
-                        else -> "LOG"
+                    if (tabId == activeTabId) {
+                        val level = when (message.messageLevel()) {
+                            ConsoleMessage.MessageLevel.ERROR -> "ERROR"
+                            ConsoleMessage.MessageLevel.WARNING -> "WARN"
+                            ConsoleMessage.MessageLevel.DEBUG -> "DEBUG"
+                            else -> "LOG"
+                        }
+
+                        appendConsole("[$level] ${message.message()}")
                     }
-
-                    appendConsole(
-                        "[$level] ${message.message()}"
-                    )
-
                     return true
                 }
             }
         }
     }
+
+    // --------------------------------------------------
+    // TABS AND SESSION
+    // --------------------------------------------------
 
     private fun createTab(
         url: String = "https://www.google.com",
@@ -436,19 +429,13 @@ class MainActivity : Activity() {
         val id = nextTabId++
         val web = createWebView(id)
 
-        val item = BrowserTab(
-            id = id,
-            web = web,
-            title = "New tab",
-            url = url
+        tabs.add(
+            BrowserTab(id, web, "New tab", url)
         )
 
-        tabs.add(item)
         switchTab(id)
 
-        if (load) {
-            web.loadUrl(url)
-        }
+        if (load) web.loadUrl(url)
     }
 
     private fun restoreTabs() {
@@ -465,7 +452,7 @@ class MainActivity : Activity() {
                     if (url.startsWith("http://") ||
                         url.startsWith("https://")
                     ) {
-                        createTab(url, true)
+                        createTab(url)
                         restored = true
                     }
 
@@ -477,7 +464,7 @@ class MainActivity : Activity() {
         }
 
         if (!restored) {
-            createTab("https://www.google.com")
+            createTab()
             return
         }
 
@@ -502,14 +489,19 @@ class MainActivity : Activity() {
 
         address.setText(item.web.url ?: item.url)
 
+        // Keep inspect mode synchronized across tabs.
+        item.web.evaluateJavascript(
+            "window.__dbInspect = $inspectEnabled;",
+            null
+        )
+
         renderTabs()
         saveSession()
+        item.web.onResume()
 
         if (devPanel.visibility == View.VISIBLE) {
-            requestDom()
+            requestDomFor(id, 0)
         }
-
-        item.web.onResume()
     }
 
     private fun closeTab(id: Int) {
@@ -531,16 +523,13 @@ class MainActivity : Activity() {
             item.web.removeJavascriptInterface("DevBrowserBridge")
             item.web.destroy()
         } catch (_: Exception) {
-            // Ignore cleanup errors from an already-destroyed WebView.
         }
 
         if (tabs.isEmpty()) {
             createTab()
         } else if (wasActive) {
-            val nextIndex = (index - 1).coerceAtLeast(0)
-                .coerceAtMost(tabs.lastIndex)
-
-            switchTab(tabs[nextIndex].id)
+            val next = (index - 1).coerceIn(0, tabs.lastIndex)
+            switchTab(tabs[next].id)
         } else {
             renderTabs()
             saveSession()
@@ -560,8 +549,7 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(9), dp(4), dp(5), dp(4))
                 background = rounded(
-                    if (selected) Color.rgb(45, 55, 82)
-                    else surface2,
+                    if (selected) Color.rgb(45, 55, 82) else surface2,
                     if (selected) accent else Color.TRANSPARENT
                 )
             }
@@ -571,9 +559,7 @@ class MainActivity : Activity() {
                 textSize = 11f
                 setTextColor(if (selected) Color.WHITE else muted)
                 maxWidth = dp(105)
-                setOnClickListener {
-                    switchTab(item.id)
-                }
+                setOnClickListener { switchTab(item.id) }
             }
 
             val close = TextView(this).apply {
@@ -581,9 +567,7 @@ class MainActivity : Activity() {
                 textSize = 16f
                 setTextColor(muted)
                 setPadding(dp(6), 0, dp(4), 0)
-                setOnClickListener {
-                    closeTab(item.id)
-                }
+                setOnClickListener { closeTab(item.id) }
             }
 
             tab.addView(title)
@@ -600,35 +584,29 @@ class MainActivity : Activity() {
             )
         }
 
-        tabStrip.addView(makeButton("+") {
-            createTab()
-        })
+        tabStrip.addView(makeButton("+") { createTab() })
     }
 
     private fun saveSession() {
         if (!::root.isInitialized) return
 
         val array = JSONArray()
-
-        tabs.forEach { item ->
-            array.put(item.web.url ?: item.url)
-        }
+        tabs.forEach { array.put(it.web.url ?: it.url) }
 
         prefs.edit()
             .putString("saved_tabs", array.toString())
             .putInt(
                 "active_tab_index",
-                tabs.indexOfFirst { it.id == activeTabId }
-                    .coerceAtLeast(0)
+                tabs.indexOfFirst { it.id == activeTabId }.coerceAtLeast(0)
             )
             .putString("last_dev_tab", currentDevTab)
             .putInt("panel_height", panelHeight)
             .apply()
     }
 
-    // ---------------------------------------------------------
-    // ADDRESS BAR AND MENU
-    // ---------------------------------------------------------
+    // --------------------------------------------------
+    // ADDRESS AND MENU
+    // --------------------------------------------------
 
     private fun loadAddress() {
         val input = address.text.toString().trim()
@@ -638,11 +616,9 @@ class MainActivity : Activity() {
             input.startsWith("https://") ||
                 input.startsWith("http://") -> input
 
-            input.contains(" ") ||
-                !input.contains(".") -> {
+            input.contains(" ") || !input.contains(".") ->
                 "https://www.google.com/search?q=" +
                     URLEncoder.encode(input, "UTF-8")
-            }
 
             else -> "https://$input"
         }
@@ -651,7 +627,6 @@ class MainActivity : Activity() {
             as InputMethodManager
 
         manager.hideSoftInputFromWindow(address.windowToken, 0)
-
         activeWeb?.loadUrl(url)
     }
 
@@ -687,9 +662,9 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // ---------------------------------------------------------
+    // --------------------------------------------------
     // DEVTOOLS PANEL
-    // ---------------------------------------------------------
+    // --------------------------------------------------
 
     private fun showDevTools(tab: String) {
         currentDevTab = tab
@@ -697,9 +672,11 @@ class MainActivity : Activity() {
         renderPanel()
 
         devPanel.alpha = 0f
+        devPanel.translationY = dp(12).toFloat()
         devPanel.animate()
             .alpha(1f)
-            .setDuration(160)
+            .translationY(0f)
+            .setDuration(180)
             .start()
 
         requestDom()
@@ -711,10 +688,12 @@ class MainActivity : Activity() {
 
         devPanel.animate()
             .alpha(0f)
-            .setDuration(120)
+            .translationY(dp(12).toFloat())
+            .setDuration(140)
             .withEndAction {
                 devPanel.visibility = View.GONE
                 devPanel.alpha = 1f
+                devPanel.translationY = 0f
             }
             .start()
 
@@ -756,7 +735,6 @@ class MainActivity : Activity() {
                             devPanel.layoutParams.apply {
                                 height = dp(panelHeight)
                             }
-
                         true
                     }
 
@@ -783,17 +761,10 @@ class MainActivity : Activity() {
 
         listOf("Elements", "Styles", "Console").forEach { name ->
             val tab = TextView(this).apply {
-                text = if (name == currentDevTab) {
-                    "● $name"
-                } else {
-                    name
-                }
-
+                text = if (name == currentDevTab) "● $name" else name
                 textSize = 12f
                 typeface = Typeface.DEFAULT_BOLD
-                setTextColor(
-                    if (name == currentDevTab) accent else muted
-                )
+                setTextColor(if (name == currentDevTab) accent else muted)
                 setPadding(dp(12), dp(13), dp(12), dp(13))
                 setOnClickListener {
                     currentDevTab = name
@@ -802,19 +773,11 @@ class MainActivity : Activity() {
                     saveSession()
                 }
             }
-
             bar.addView(tab)
         }
 
-        bar.addView(
-            View(this),
-            LinearLayout.LayoutParams(0, 1, 1f)
-        )
-
-        bar.addView(makeButton("✕") {
-            closeDevTools()
-        })
-
+        bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        bar.addView(makeButton("✕") { closeDevTools() })
         devPanel.addView(bar)
 
         val scroll = ScrollView(this).apply {
@@ -828,7 +791,6 @@ class MainActivity : Activity() {
         }
 
         scroll.addView(panelBody)
-
         devPanel.addView(
             scroll,
             LinearLayout.LayoutParams(-1, 0, 1f)
@@ -841,19 +803,17 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---------------------------------------------------------
+    // --------------------------------------------------
     // ELEMENTS
-    // ---------------------------------------------------------
+    // --------------------------------------------------
 
     private fun renderElements() {
-        panelBody.addView(
-            makeLabel("ELEMENTS  /  DOM INSPECTOR", 11f, accent)
-        )
+        panelBody.addView(makeLabel("ELEMENTS / DOM INSPECTOR", 11f, accent))
 
         panelBody.addView(
             makeButton(
                 if (inspectEnabled) "Stop picking elements"
-                else "◎  Pick element on webpage"
+                else "◎ Pick element on webpage"
             ) {
                 toggleInspect(!inspectEnabled)
             }
@@ -868,17 +828,11 @@ class MainActivity : Activity() {
             )
         )
 
-        panelBody.addView(
-            makeLabel("DOCUMENT TREE", 11f, accent)
-        )
+        panelBody.addView(makeLabel("DOCUMENT TREE", 11f, accent))
 
         if (domNodes.length() == 0) {
             panelBody.addView(
-                makeLabel(
-                    "DOM is loading. Tap Refresh DOM if it stays empty.",
-                    11f,
-                    muted
-                )
+                makeLabel("DOM loading. Use Refresh DOM if needed.", 11f, muted)
             )
         } else {
             for (i in 0 until domNodes.length()) {
@@ -886,48 +840,31 @@ class MainActivity : Activity() {
                 val depth = node.optInt("depth", 0)
                 val path = node.optJSONArray("path") ?: JSONArray()
                 val selected = node.optBoolean("selected", false)
-                val labelText = node.optString("label", "element")
 
                 val row = TextView(this).apply {
                     text = (if (selected) "◆ " else "  ") +
-                        labelText
-
+                        node.optString("label", "element")
                     textSize = 11f
                     typeface = Typeface.MONOSPACE
-                    setTextColor(
-                        if (selected) accent else textColor
-                    )
+                    setTextColor(if (selected) accent else textColor)
                     setPadding(
                         dp(8 + depth * 13),
                         dp(7),
                         dp(5),
                         dp(7)
                     )
-                    background = if (selected) {
-                        rounded(Color.rgb(43, 43, 68))
-                    } else {
-                        rounded(bg)
-                    }
-
-                    setOnClickListener {
-                        selectDomPath(path)
-                    }
+                    background = rounded(
+                        if (selected) Color.rgb(43, 43, 68) else bg
+                    )
+                    setOnClickListener { selectDomPath(path) }
                 }
 
-                panelBody.addView(
-                    row,
-                    LinearLayout.LayoutParams(-1, -2)
-                )
+                panelBody.addView(row)
             }
         }
 
-        panelBody.addView(makeButton("↻  Refresh DOM") {
-            requestDom()
-        })
-
-        panelBody.addView(
-            makeLabel("HTML EDITOR · SELECTED ELEMENT", 11f, accent)
-        )
+        panelBody.addView(makeButton("↻ Refresh DOM") { requestDom() })
+        panelBody.addView(makeLabel("HTML EDITOR", 11f, accent))
 
         val htmlEditor = makeEditor(
             selectedHtml,
@@ -941,23 +878,17 @@ class MainActivity : Activity() {
         )
 
         panelBody.addView(makeButton("Apply HTML") {
-            if (selectedHtml.isBlank()) {
-                status.text = "Select an element first"
-            } else {
-                applyHtml(htmlEditor.text.toString())
-            }
+            applyHtml(htmlEditor.text.toString())
         })
     }
 
     private fun selectDomPath(path: JSONArray) {
-        val values = mutableListOf<Int>()
-
+        val values = JSONArray()
         for (i in 0 until path.length()) {
-            values.add(path.optInt(i, -1))
+            values.put(path.optInt(i, -1))
         }
 
-        val jsonPath = JSONArray(values).toString()
-        val quotedPath = JSONObject.quote(jsonPath)
+        val quotedPath = JSONObject.quote(values.toString())
 
         activeWeb?.evaluateJavascript(
             """
@@ -990,7 +921,7 @@ class MainActivity : Activity() {
         }
 
         if (html.length > 50000) {
-            status.text = "HTML is too large (50 KB limit)"
+            status.text = "HTML exceeds 50 KB limit"
             return
         }
 
@@ -1013,7 +944,7 @@ class MainActivity : Activity() {
 
                     old.replaceWith(template.content);
                     window.__dbSelected = first;
-                    window.__dbSend(first);
+                    window.__dbSelect(first);
 
                     return "HTML applied";
                 } catch(e) {
@@ -1026,26 +957,17 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---------------------------------------------------------
-    // STYLES
-    // ---------------------------------------------------------
+    // --------------------------------------------------
+    // STYLES AND BOX MODEL
+    // --------------------------------------------------
 
     private fun renderStyles() {
-        panelBody.addView(
-            makeLabel("STYLES  /  CSS INSPECTOR", 11f, accent)
-        )
-
+        panelBody.addView(makeLabel("STYLES / CSS INSPECTOR", 11f, accent))
         panelBody.addView(
             makeLabel(
-                selectedSelector.ifBlank {
-                    "Select an element to inspect CSS."
-                },
+                selectedSelector.ifBlank { "Select an element to inspect CSS." },
                 12f
             )
-        )
-
-        panelBody.addView(
-            makeLabel("BOX MODEL", 11f, accent)
         )
 
         val box = try {
@@ -1053,6 +975,8 @@ class MainActivity : Activity() {
         } catch (_: Exception) {
             JSONObject()
         }
+
+        panelBody.addView(makeLabel("BOX MODEL", 11f, accent))
 
         val boxView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1062,48 +986,24 @@ class MainActivity : Activity() {
         }
 
         boxView.addView(
-            boxLayer(
-                "MARGIN",
-                box.optString("margin", "—"),
-                Color.rgb(104, 75, 38)
-            )
+            boxLayer("MARGIN", box.optString("margin", "—"), Color.rgb(104, 75, 38))
         )
-
         boxView.addView(
-            boxLayer(
-                "BORDER",
-                box.optString("border", "—"),
-                Color.rgb(137, 89, 39)
-            )
+            boxLayer("BORDER", box.optString("border", "—"), Color.rgb(137, 89, 39))
         )
-
         boxView.addView(
-            boxLayer(
-                "PADDING",
-                box.optString("padding", "—"),
-                Color.rgb(44, 91, 61)
-            )
+            boxLayer("PADDING", box.optString("padding", "—"), Color.rgb(44, 91, 61))
         )
-
         boxView.addView(
-            boxLayer(
-                "CONTENT",
-                box.optString("content", "—"),
-                Color.rgb(42, 75, 124)
-            )
+            boxLayer("CONTENT", box.optString("content", "—"), Color.rgb(42, 75, 124))
         )
 
         panelBody.addView(boxView)
-
-        panelBody.addView(
-            makeLabel("COMPUTED CSS", 11f, accent)
-        )
+        panelBody.addView(makeLabel("COMPUTED CSS", 11f, accent))
 
         panelBody.addView(
             makeLabel(
-                selectedComputedCss.ifBlank {
-                    "No element selected."
-                },
+                selectedComputedCss.ifBlank { "No element selected." },
                 11f
             ).apply {
                 typeface = Typeface.MONOSPACE
@@ -1112,9 +1012,7 @@ class MainActivity : Activity() {
             }
         )
 
-        panelBody.addView(
-            makeLabel("INLINE CSS · EDITABLE", 11f, accent)
-        )
+        panelBody.addView(makeLabel("INLINE CSS · EDITABLE", 11f, accent))
 
         val cssEditor = makeEditor(
             selectedInlineCss,
@@ -1128,71 +1026,58 @@ class MainActivity : Activity() {
         )
 
         panelBody.addView(makeButton("Apply CSS") {
-            if (selectedSelector.isBlank()) {
-                status.text = "Select an element first"
-            } else {
-                val quoted = JSONObject.quote(
-                    cssEditor.text.toString()
-                )
+            val quoted = JSONObject.quote(cssEditor.text.toString())
 
-                activeWeb?.evaluateJavascript(
-                    """
-                    (function(){
-                        try {
-                            const el = window.__dbSelected;
-                            if (!el) return "No selected element";
+            activeWeb?.evaluateJavascript(
+                """
+                (function(){
+                    try {
+                        const el = window.__dbSelected;
+                        if (!el) return "No selected element";
 
-                            el.style.cssText = $quoted;
-                            window.__dbSend(el);
-
-                            return "CSS applied";
-                        } catch(e) {
-                            return "CSS error: " + e.message;
-                        }
-                    })();
-                    """.trimIndent()
-                ) { result ->
-                    status.text = decodeJsResult(result)
-                }
+                        el.style.cssText = $quoted;
+                        window.__dbSend(el);
+                        return "CSS applied";
+                    } catch(e) {
+                        return "CSS error: " + e.message;
+                    }
+                })();
+                """.trimIndent()
+            ) { result ->
+                status.text = decodeJsResult(result)
             }
         })
 
-        panelBody.addView(makeButton("↻  Refresh styles") {
-            requestDom()
-        })
+        panelBody.addView(makeButton("↻ Refresh styles") { requestDom() })
     }
 
     private fun boxLayer(
         title: String,
         value: String,
         color: Int
-    ): TextView {
-        return TextView(this).apply {
-            text = "$title\n$value"
-            gravity = Gravity.CENTER
-            textSize = 11f
-            typeface = Typeface.MONOSPACE
-            setTextColor(Color.WHITE)
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            background = rounded(color)
+    ) = TextView(this).apply {
+        text = "$title\n$value"
+        gravity = Gravity.CENTER
+        textSize = 11f
+        typeface = Typeface.MONOSPACE
+        setTextColor(Color.WHITE)
+        setPadding(dp(10), dp(8), dp(10), dp(8))
+        background = rounded(color)
 
-            layoutParams = LinearLayout.LayoutParams(
-                -1,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, dp(3), 0, dp(3))
-            }
+        layoutParams = LinearLayout.LayoutParams(
+            -1,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(0, dp(3), 0, dp(3))
         }
     }
 
-    // ---------------------------------------------------------
-    // JAVASCRIPT CONSOLE
-    // ---------------------------------------------------------
+    // --------------------------------------------------
+    // CONSOLE
+    // --------------------------------------------------
 
     private fun renderConsole() {
-        panelBody.addView(
-            makeLabel("CONSOLE  /  JAVASCRIPT", 11f, accent)
-        )
+        panelBody.addView(makeLabel("CONSOLE / JAVASCRIPT", 11f, accent))
 
         consoleOutput = makeLabel(
             consoleHistory.joinToString("\n")
@@ -1210,23 +1095,16 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(-1, dp(145))
         )
 
-        val command = makeEditor(
-            "",
-            "Enter JavaScript here...",
-            2
-        )
+        val command = makeEditor("", "Enter JavaScript here...", 2)
 
         panelBody.addView(
             command,
             LinearLayout.LayoutParams(-1, dp(75))
         )
 
-        panelBody.addView(makeButton("▶  Run JavaScript") {
+        panelBody.addView(makeButton("▶ Run JavaScript") {
             val source = command.text.toString()
-
-            if (source.isNotBlank()) {
-                runJavaScript(source)
-            }
+            if (source.isNotBlank()) runJavaScript(source)
         })
 
         panelBody.addView(makeButton("Clear console") {
@@ -1236,41 +1114,67 @@ class MainActivity : Activity() {
     }
 
     private fun runJavaScript(source: String) {
+        val item = activeTab ?: run {
+            appendConsole("No active webpage.")
+            return
+        }
+
         appendConsole("> $source")
 
+        val requestId = ++requestSequence
         val quoted = JSONObject.quote(source)
 
-        activeWeb?.evaluateJavascript(
+        item.web.evaluateJavascript(
             """
             (function(){
+                const requestId = $requestId;
+
+                function send(value, isError) {
+                    try {
+                        let output;
+
+                        if (value === undefined) {
+                            output = "undefined";
+                        } else if (typeof value === "string") {
+                            output = value;
+                        } else {
+                            try {
+                                output = JSON.stringify(value, null, 2);
+                            } catch(e) {
+                                output = String(value);
+                            }
+                        }
+
+                        DevBrowserBridge.postConsoleResult(
+                            requestId,
+                            String(output),
+                            !!isError
+                        );
+                    } catch(e) {}
+                }
+
                 try {
                     const result = (0, eval)($quoted);
 
-                    return Promise.resolve(result).then(function(value) {
-                        if (value === undefined) return "undefined";
-
-                        if (typeof value === "string") return value;
-
-                        try {
-                            return JSON.stringify(value, null, 2);
-                        } catch(e) {
-                            return String(value);
-                        }
-                    });
+                    if (result && typeof result.then === "function") {
+                        result.then(
+                            value => send(value, false),
+                            error => send(error && (error.stack || error.message) || error, true)
+                        );
+                    } else {
+                        send(result, false);
+                    }
                 } catch(e) {
-                    return "Error: " + (e.stack || e.message || e);
+                    send(e && (e.stack || e.message) || e, true);
                 }
             })();
-            """.trimIndent()
-        ) { result ->
-            appendConsole(decodeJsResult(result))
-        } ?: appendConsole("No active webpage.")
+            """.trimIndent(),
+            null
+        )
     }
 
     private fun decodeJsResult(raw: String?): String {
-        if (raw.isNullOrBlank() || raw == "null") {
-            return "undefined"
-        }
+        if (raw.isNullOrBlank() || raw == "null") return "undefined"
 
         return try {
             val value = JSONTokener(raw).nextValue()
@@ -1288,14 +1192,13 @@ class MainActivity : Activity() {
                 consoleHistory.removeAt(0)
             }
 
-            consoleOutput?.text =
-                consoleHistory.joinToString("\n")
+            consoleOutput?.text = consoleHistory.joinToString("\n")
         }
     }
 
-    // ---------------------------------------------------------
-    // INSPECTOR JAVASCRIPT BRIDGE
-    // ---------------------------------------------------------
+    // --------------------------------------------------
+    // INSPECTOR BRIDGE
+    // --------------------------------------------------
 
     private inner class InspectorBridge(
         private val tabId: Int
@@ -1309,11 +1212,29 @@ class MainActivity : Activity() {
                 if (tabId != activeTabId) return@runOnUiThread
 
                 try {
-                    val data = JSONObject(payload)
-                    handleInspectorData(data)
+                    handleInspectorData(JSONObject(payload))
                 } catch (_: Exception) {
                     status.text = "Inspector data error"
                 }
+            }
+        }
+
+        @JavascriptInterface
+        fun postConsoleResult(
+            requestId: Int,
+            result: String,
+            isError: Boolean
+        ) {
+            if (result.length > 30000) return
+
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (tabId != activeTabId) return@runOnUiThread
+
+                appendConsole(
+                    (if (isError) "ERROR: " else "") +
+                        result.take(30000)
+                )
             }
         }
     }
@@ -1324,7 +1245,10 @@ class MainActivity : Activity() {
         val script = """
         (function() {
             if (window.__dbInstalled) {
-                window.__dbSend(window.__dbSelected || document.body);
+                window.__dbInspect = ${if (inspectEnabled) "true" else "false"};
+                if (window.__dbSend) {
+                    window.__dbSend(window.__dbSelected || document.body);
+                }
                 return;
             }
 
@@ -1351,27 +1275,6 @@ class MainActivity : Activity() {
                 return value;
             }
 
-            function getPath(el) {
-                const path = [];
-                let node = el;
-
-                while (node && node !== document.body) {
-                    const parent = node.parentElement;
-                    if (!parent) break;
-
-                    path.unshift(
-                        Array.prototype.indexOf.call(
-                            parent.children,
-                            node
-                        )
-                    );
-
-                    node = parent;
-                }
-
-                return path;
-            }
-
             function getTree() {
                 const output = [];
                 let count = 0;
@@ -1392,20 +1295,12 @@ class MainActivity : Activity() {
                     const children = Array.from(node.children);
 
                     for (let i = 0; i < children.length; i++) {
-                        walk(
-                            children[i],
-                            depth + 1,
-                            path.concat(i)
-                        );
-
+                        walk(node.children[i], depth + 1, path.concat(i));
                         if (count >= 160) break;
                     }
                 }
 
-                if (document.body) {
-                    walk(document.body, 0, []);
-                }
-
+                if (document.body) walk(document.body, 0, []);
                 return output;
             }
 
@@ -1414,27 +1309,17 @@ class MainActivity : Activity() {
 
                 window.__dbSelected = el;
 
-                const computed = window.getComputedStyle(el);
-
+                const computed = getComputedStyle(el);
                 const properties = [
-                    "display",
-                    "position",
-                    "width",
-                    "height",
-                    "margin",
-                    "padding",
-                    "color",
-                    "background-color",
-                    "font-size",
-                    "font-family",
-                    "border",
-                    "opacity"
+                    "display", "position", "width", "height",
+                    "margin", "padding", "color",
+                    "background-color", "font-size",
+                    "font-family", "border", "opacity"
                 ];
 
-                const css = properties.map(function(name) {
-                    return name + ": " +
-                        computed.getPropertyValue(name) + ";";
-                }).join("\\n");
+                const css = properties.map(name =>
+                    name + ": " + computed.getPropertyValue(name) + ";"
+                ).join("\\n");
 
                 const data = {
                     selector: makeSelector(el),
@@ -1451,28 +1336,23 @@ class MainActivity : Activity() {
                 };
 
                 try {
-                    window.DevBrowserBridge.postData(
-                        JSON.stringify(data)
-                    );
+                    DevBrowserBridge.postData(JSON.stringify(data));
                 } catch(e) {
                     console.error("DevBrowser bridge:", e);
                 }
             };
 
             window.__dbSelect = function(el) {
-                if (!el) return;
+                if (!el || el.nodeType !== 1) return;
 
                 if (window.__dbPrevious) {
-                    window.__dbPrevious.style.outline =
-                        window.__dbOldOutline;
-                    window.__dbPrevious.style.outlineOffset =
-                        window.__dbOldOffset;
+                    window.__dbPrevious.style.outline = window.__dbOldOutline;
+                    window.__dbPrevious.style.outlineOffset = window.__dbOldOffset;
                 }
 
                 window.__dbPrevious = el;
                 window.__dbOldOutline = el.style.outline || "";
-                window.__dbOldOffset =
-                    el.style.outlineOffset || "";
+                window.__dbOldOffset = el.style.outlineOffset || "";
 
                 el.style.outline = "2px solid #8B7CFF";
                 el.style.outlineOffset = "2px";
@@ -1494,6 +1374,34 @@ class MainActivity : Activity() {
                 }
             }, true);
 
+            if (window.MutationObserver && document.body) {
+                let updateQueued = false;
+
+                const observer = new MutationObserver(function() {
+                    if (updateQueued) return;
+                    updateQueued = true;
+
+                    setTimeout(function() {
+                        updateQueued = false;
+
+                        if (window.__dbSelected &&
+                            !document.contains(window.__dbSelected)) {
+                            window.__dbSelected = document.body;
+                        }
+
+                        window.__dbSend(
+                            window.__dbSelected || document.body
+                        );
+                    }, 250);
+                });
+
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true
+                });
+            }
+
             window.__dbSend(document.body);
         })();
         """.trimIndent()
@@ -1502,20 +1410,39 @@ class MainActivity : Activity() {
     }
 
     private fun requestDom() {
-        activeWeb?.evaluateJavascript(
+        val id = activeTabId
+        if (id != -1) requestDomFor(id, 0)
+    }
+
+    private fun requestDomFor(tabId: Int, attempt: Int) {
+        val item = tabs.firstOrNull { it.id == tabId } ?: return
+        if (attempt > 12) {
+            if (tabId == activeTabId) status.text = "Inspector unavailable"
+            return
+        }
+
+        item.web.evaluateJavascript(
             """
             (function(){
-                if (window.__dbSend) {
+                if (window.__dbSend && document.body) {
                     window.__dbSend(
                         window.__dbSelected || document.body
                     );
-                } else {
-                    console.warn("Inspector is not ready yet.");
+                    return true;
                 }
+                return false;
             })();
-            """.trimIndent(),
-            null
-        )
+            """.trimIndent()
+        ) { result ->
+            if (result == "true") return@evaluateJavascript
+
+            item.web.postDelayed({
+                if (tabs.any { it.id == tabId }) {
+                    installInspector(item.web)
+                    requestDomFor(tabId, attempt + 1)
+                }
+            }, 350)
+        }
     }
 
     private fun handleInspectorData(data: JSONObject) {
@@ -1532,8 +1459,12 @@ class MainActivity : Activity() {
             "DOM loaded"
         }
 
+        // Do not destroy an editor while the user is typing.
+        val editorFocused = devPanel.findFocus() is EditText
+
         if (devPanel.visibility == View.VISIBLE &&
-            currentDevTab != "Console"
+            currentDevTab != "Console" &&
+            !editorFocused
         ) {
             renderPanel()
         }
@@ -1569,9 +1500,9 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---------------------------------------------------------
+    // --------------------------------------------------
     // TUTORIAL
-    // ---------------------------------------------------------
+    // --------------------------------------------------
 
     private fun showTutorial() {
         val steps = arrayOf(
@@ -1600,8 +1531,7 @@ class MainActivity : Activity() {
                         .apply()
                 }
                 .setPositiveButton(
-                    if (index == steps.lastIndex) "Finish"
-                    else "Next"
+                    if (index == steps.lastIndex) "Finish" else "Next"
                 ) { _, _ ->
                     if (index < steps.lastIndex) {
                         index++
@@ -1610,7 +1540,6 @@ class MainActivity : Activity() {
                         prefs.edit()
                             .putBoolean("show_tutorial", false)
                             .apply()
-
                         showDevTools("Elements")
                     }
                 }
@@ -1620,9 +1549,9 @@ class MainActivity : Activity() {
         showStep()
     }
 
-    // ---------------------------------------------------------
-    // LIFECYCLE AND BACK
-    // ---------------------------------------------------------
+    // --------------------------------------------------
+    // LIFECYCLE
+    // --------------------------------------------------
 
     override fun onPause() {
         saveSession()
@@ -1639,20 +1568,15 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-
         activeWeb?.onResume()
     }
 
     override fun onDestroy() {
         tabs.forEach { item ->
             try {
-                (item.web.parent as? ViewGroup)
-                    ?.removeView(item.web)
-
+                (item.web.parent as? ViewGroup)?.removeView(item.web)
                 item.web.stopLoading()
-                item.web.removeJavascriptInterface(
-                    "DevBrowserBridge"
-                )
+                item.web.removeJavascriptInterface("DevBrowserBridge")
                 item.web.destroy()
             } catch (_: Exception) {
             }
@@ -1666,11 +1590,8 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         when {
             devPanel.visibility == View.VISIBLE -> closeDevTools()
-
             activeWeb?.canGoBack() == true -> activeWeb?.goBack()
-
             tabs.size > 1 -> closeTab(activeTabId)
-
             else -> super.onBackPressed()
         }
     }
