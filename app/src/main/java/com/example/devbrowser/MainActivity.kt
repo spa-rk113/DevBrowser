@@ -15,6 +15,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.*
 import org.json.JSONObject
+import org.json.JSONArray
 
 class MainActivity : Activity() {
 
@@ -28,10 +29,10 @@ class MainActivity : Activity() {
     private var selectedInlineCss = ""
     private var selectedComputedCss = ""
     private var domTree = "Load a webpage to inspect its DOM."
+    private var domNodes = JSONArray()
     private var currentTab = "Elements"
-    private var inspecting = false
 
-    private var consoleHistory = mutableListOf<String>()
+    private val consoleHistory = mutableListOf<String>()
     private var consoleOutput: TextView? = null
 
     private val bg = Color.rgb(25, 27, 31)
@@ -68,7 +69,6 @@ class MainActivity : Activity() {
         val navigation = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.WHITE)
         }
 
         navigation.addView(button("←") {
@@ -95,12 +95,10 @@ class MainActivity : Activity() {
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            settings.javaScriptCanOpenWindowsAutomatically = false
             settings.allowFileAccess = false
             settings.allowContentAccess = false
 
             webViewClient = object : WebViewClient() {
-
                 override fun onPageStarted(
                     view: WebView?,
                     url: String?,
@@ -110,6 +108,7 @@ class MainActivity : Activity() {
                     selectedHtml = ""
                     selectedInlineCss = ""
                     selectedComputedCss = ""
+                    domNodes = JSONArray()
                 }
 
                 override fun onPageFinished(
@@ -123,11 +122,9 @@ class MainActivity : Activity() {
             }
 
             webChromeClient = object : WebChromeClient() {
-
                 override fun onConsoleMessage(
                     message: ConsoleMessage
                 ): Boolean {
-
                     val line = message.message()
 
                     if (line.startsWith("__DEVBROWSER__")) {
@@ -145,7 +142,6 @@ class MainActivity : Activity() {
                             ConsoleMessage.MessageLevel.WARNING -> "WARN"
                             else -> "LOG"
                         }
-
                         appendConsole("[$level] $line")
                     }
 
@@ -182,13 +178,11 @@ class MainActivity : Activity() {
         )
 
         setContentView(root)
-
         webView.loadUrl("https://www.google.com")
     }
 
-    private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
-    }
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     private fun button(
         label: String,
@@ -204,12 +198,10 @@ class MainActivity : Activity() {
 
     private fun loadAddress() {
         var url = address.text.toString().trim()
-
         if (url.isEmpty()) return
 
         if (!url.startsWith("http://") &&
             !url.startsWith("https://")) {
-
             url = if (url.contains(".") && !url.contains(" ")) {
                 "https://$url"
             } else {
@@ -218,8 +210,7 @@ class MainActivity : Activity() {
             }
         }
 
-        (getSystemService(INPUT_METHOD_SERVICE)
-                as InputMethodManager)
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
             .hideSoftInputFromWindow(address.windowToken, 0)
 
         webView.loadUrl(url)
@@ -239,24 +230,19 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("DevBrowser")
             .setItems(options) { _, which ->
-
                 when (which) {
                     0 -> showDevTools("Elements")
-
                     1 -> {
                         showDevTools("Elements")
                         toggleInspect(true)
                     }
-
                     2 -> showDevTools("Elements")
                     3 -> showDevTools("Styles")
                     4 -> showDevTools("Console")
-
                     5 -> {
                         devPanel.visibility = View.GONE
                         toggleInspect(false)
                     }
-
                     6 -> webView.reload()
                 }
             }
@@ -271,23 +257,16 @@ class MainActivity : Activity() {
 
     private fun buildTabs(): LinearLayout {
         return LinearLayout(this).apply {
-
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.rgb(39, 41, 47))
 
             listOf("Elements", "Styles", "Console").forEach { tab ->
-
                 val item = TextView(this@MainActivity).apply {
                     text = if (tab == currentTab) "● $tab" else tab
                     textSize = 13f
-
                     setTextColor(
-                        if (tab == currentTab)
-                            Color.WHITE
-                        else
-                            Color.LTGRAY
+                        if (tab == currentTab) Color.WHITE else Color.LTGRAY
                     )
-
                     setPadding(dp(14), dp(12), dp(14), dp(12))
 
                     setOnClickListener {
@@ -295,7 +274,6 @@ class MainActivity : Activity() {
                         renderPanel()
                     }
                 }
-
                 addView(item)
             }
 
@@ -304,7 +282,6 @@ class MainActivity : Activity() {
                 textSize = 16f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
-
                 setOnClickListener {
                     devPanel.visibility = View.GONE
                     toggleInspect(false)
@@ -313,18 +290,13 @@ class MainActivity : Activity() {
 
             addView(
                 close,
-                LinearLayout.LayoutParams(
-                    0,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    1f
-                )
+                LinearLayout.LayoutParams(0, -1, 1f)
             )
         }
     }
 
     private fun renderPanel() {
         devPanel.removeAllViews()
-
         devPanel.addView(buildTabs())
 
         panelBody = LinearLayout(this).apply {
@@ -338,11 +310,7 @@ class MainActivity : Activity() {
 
         devPanel.addView(
             scroll,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
+            LinearLayout.LayoutParams(-1, 0, 1f)
         )
 
         when (currentTab) {
@@ -352,10 +320,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun label(
-        value: String,
-        size: Float = 12f
-    ): TextView {
+    private fun label(value: String, size: Float = 12f): TextView {
         return TextView(this).apply {
             text = value
             textSize = size
@@ -383,39 +348,86 @@ class MainActivity : Activity() {
     }
 
     private fun renderElements() {
+        panelBody.addView(label("DOM TREE · Click any element"))
 
-        panelBody.addView(
-            label("DOM TREE · Live webpage elements")
-        )
-
-        val tree = label(domTree, 11f).apply {
-            typeface = android.graphics.Typeface.MONOSPACE
+        val treeContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(8))
             setBackgroundColor(Color.rgb(27, 29, 34))
         }
 
+        if (domNodes.length() == 0) {
+            treeContainer.addView(label(domTree, 11f))
+        } else {
+            for (i in 0 until domNodes.length()) {
+                val node = domNodes.optJSONObject(i) ?: continue
+                val nodeLabel = node.optString("label", "element")
+                val path = node.optJSONArray("path") ?: JSONArray()
+                val depth = node.optInt("depth", 0)
+                val selected = node.optBoolean("selected", false)
+
+                val row = TextView(this).apply {
+                    text = (if (selected) "▶ " else "  ") + nodeLabel
+                    textSize = 11f
+                    typeface = android.graphics.Typeface.MONOSPACE
+                    setTextColor(
+                        if (selected) Color.rgb(255, 183, 77)
+                        else textColor
+                    )
+                    setPadding(dp(6 + depth * 14), dp(5), dp(6), dp(5))
+                    isClickable = true
+
+                    setOnClickListener {
+                        webView.evaluateJavascript(
+                            """
+                            (function(){
+                                let el = document.body;
+                                const path = $path;
+                                for (const index of path) {
+                                    if (!el || !el.children[index]) return;
+                                    el = el.children[index];
+                                }
+                                if (el) {
+                                    if (window.__devPreviousOutline) {
+                                        window.__devPreviousOutline.style.outline =
+                                            window.__devPreviousOutlineOutline || "";
+                                    }
+                                    window.__devPreviousOutline = el;
+                                    window.__devPreviousOutlineOutline =
+                                        el.style.outline || "";
+                                    el.style.outline = "2px solid #ff5722";
+                                    window.__devSendSelection(el);
+                                }
+                            })();
+                            """.trimIndent(),
+                            null
+                        )
+                    }
+                }
+
+                treeContainer.addView(row)
+            }
+        }
+
+        val treeScroll = ScrollView(this)
+        treeScroll.addView(treeContainer)
+
         panelBody.addView(
-            tree,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(110)
-            )
+            treeScroll,
+            LinearLayout.LayoutParams(-1, dp(150))
         )
 
         panelBody.addView(label("SELECTED ELEMENT · HTML"))
 
         val htmlInput = editor(
             selectedHtml,
-            "Tap Pick element, then select an element.",
+            "Pick an element to inspect its HTML.",
             5
         )
 
         panelBody.addView(
             htmlInput,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(130)
-            )
+            LinearLayout.LayoutParams(-1, dp(130))
         )
 
         val actions = LinearLayout(this).apply {
@@ -423,13 +435,10 @@ class MainActivity : Activity() {
         }
 
         actions.addView(button("Apply HTML") {
-
             if (selectedHtml.isEmpty()) {
                 status.text = "Select an element first"
             } else {
-                val quoted = JSONObject.quote(
-                    htmlInput.text.toString()
-                )
+                val quoted = JSONObject.quote(htmlInput.text.toString())
 
                 webView.evaluateJavascript(
                     """
@@ -439,12 +448,10 @@ class MainActivity : Activity() {
 
                         const box = document.createElement('div');
                         box.innerHTML = $quoted;
-
                         const next = box.firstElementChild;
 
                         if (next) {
                             old.replaceWith(next);
-                            window.__devSelected = next;
                             window.__devSendSelection(next);
                         }
                     })();
@@ -462,16 +469,12 @@ class MainActivity : Activity() {
     }
 
     private fun renderStyles() {
-
-        panelBody.addView(
-            label("COMPUTED STYLES · Browser values")
-        )
+        panelBody.addView(label("COMPUTED STYLES"))
 
         val computed = label(
-            if (selectedComputedCss.isEmpty())
+            selectedComputedCss.ifEmpty {
                 "Select an element to inspect its CSS."
-            else
-                selectedComputedCss,
+            },
             11f
         ).apply {
             typeface = android.graphics.Typeface.MONOSPACE
@@ -481,10 +484,7 @@ class MainActivity : Activity() {
 
         panelBody.addView(
             computed,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(130)
-            )
+            LinearLayout.LayoutParams(-1, dp(130))
         )
 
         panelBody.addView(label("INLINE CSS · Editable"))
@@ -497,29 +497,21 @@ class MainActivity : Activity() {
 
         panelBody.addView(
             cssInput,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(100)
-            )
+            LinearLayout.LayoutParams(-1, dp(100))
         )
 
         panelBody.addView(button("Apply CSS") {
-
             if (selectedHtml.isEmpty()) {
                 status.text = "Select an element first"
             } else {
-                val css = JSONObject.quote(
-                    cssInput.text.toString()
-                )
+                val css = JSONObject.quote(cssInput.text.toString())
 
                 webView.evaluateJavascript(
                     """
                     (function(){
                         if (window.__devSelected) {
                             window.__devSelected.style.cssText = $css;
-                            window.__devSendSelection(
-                                window.__devSelected
-                            );
+                            window.__devSendSelection(window.__devSelected);
                         }
                     })();
                     """.trimIndent(),
@@ -530,10 +522,7 @@ class MainActivity : Activity() {
     }
 
     private fun renderConsole() {
-
-        panelBody.addView(
-            label("CONSOLE · Logs, warnings and errors")
-        )
+        panelBody.addView(label("CONSOLE · Logs, warnings and errors"))
 
         consoleOutput = label(
             consoleHistory.joinToString("\n")
@@ -547,32 +536,20 @@ class MainActivity : Activity() {
 
         panelBody.addView(
             consoleOutput,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(150)
-            )
+            LinearLayout.LayoutParams(-1, dp(150))
         )
 
-        val command = editor(
-            "",
-            "Enter JavaScript and tap Run...",
-            2
-        )
+        val command = editor("", "Enter JavaScript and tap Run...", 2)
 
         panelBody.addView(
             command,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(75)
-            )
+            LinearLayout.LayoutParams(-1, dp(75))
         )
 
         panelBody.addView(button("▶ Run JavaScript") {
-
             val source = command.text.toString()
 
             if (source.isNotBlank()) {
-
                 appendConsole("> $source")
 
                 val quoted = JSONObject.quote(source)
@@ -582,33 +559,23 @@ class MainActivity : Activity() {
                     (function(){
                         try {
                             let value = (0, eval)($quoted);
-
                             if (value === undefined) return "undefined";
-
-                            if (typeof value === "object" &&
-                                value !== null) {
-                                try {
-                                    return JSON.stringify(value, null, 2);
-                                } catch(e) {}
+                            if (typeof value === "object" && value !== null) {
+                                return JSON.stringify(value, null, 2);
                             }
-
                             return String(value);
-
                         } catch(e) {
                             return "Error: " + (e.stack || e);
                         }
                     })();
                     """.trimIndent()
                 ) { result ->
-
                     val output = try {
-                        JSONObject(
-                            "{\"value\":$result}"
-                        ).optString("value", "undefined")
+                        JSONObject("{\"value\":$result}")
+                            .optString("value", "undefined")
                     } catch (_: Exception) {
                         result ?: "undefined"
                     }
-
                     appendConsole(output)
                 }
             }
@@ -623,38 +590,32 @@ class MainActivity : Activity() {
     private fun appendConsole(line: String) {
         runOnUiThread {
             consoleHistory.add(line)
-
             if (consoleHistory.size > 150) {
                 consoleHistory.removeAt(0)
             }
-
-            consoleOutput?.text =
-                consoleHistory.joinToString("\n")
+            consoleOutput?.text = consoleHistory.joinToString("\n")
         }
     }
 
     private fun handleInspectorData(data: JSONObject) {
-
         runOnUiThread {
-
             domTree = data.optString("tree", domTree)
+            domNodes = data.optJSONArray("treeNodes") ?: JSONArray()
             selectedHtml = data.optString("html", "")
             selectedInlineCss = data.optString("inlineCss", "")
             selectedComputedCss = data.optString("computedCss", "")
 
-            status.text =
-                "Selected: " + data.optString("selector", "element")
+            status.text = "Selected: " +
+                data.optString("selector", "element")
 
             if (devPanel.visibility == View.VISIBLE &&
-                (currentTab == "Elements" ||
-                 currentTab == "Styles")) {
+                (currentTab == "Elements" || currentTab == "Styles")) {
                 renderPanel()
             }
         }
     }
 
     private fun installInspector() {
-
         val script = """
         (function(){
 
@@ -677,91 +638,92 @@ class MainActivity : Activity() {
                 if (el.id) s += "#" + el.id;
 
                 if (el.classList && el.classList.length) {
-                    s += "." +
-                        Array.from(el.classList)
+                    s += "." + Array.from(el.classList)
                         .slice(0, 3).join(".");
                 }
 
                 return s;
             }
 
-            function tree() {
+            function treeData() {
+                let nodes = [];
                 let lines = [];
                 let count = 0;
 
-                function walk(node, depth) {
-
-                    if (!node || count >= 220 || depth > 5) return;
+                function walk(node, depth, path) {
+                    if (!node || count >= 220 || depth > 6) return;
                     if (node.nodeType !== 1) return;
 
                     count++;
 
+                    const label = selector(node);
+                    const selected = node === window.__devSelected;
+
+                    nodes.push({
+                        label: label,
+                        depth: depth,
+                        path: path,
+                        selected: selected
+                    });
+
                     lines.push(
                         "  ".repeat(depth) +
-                        (node === window.__devSelected ? "▶ " : "  ") +
-                        selector(node)
+                        (selected ? "▶ " : "  ") + label
                     );
 
-                    for (let child of node.children) {
-                        walk(child, depth + 1);
-                    }
+                    Array.from(node.children).forEach(function(child, index) {
+                        walk(child, depth + 1, path.concat(index));
+                    });
                 }
 
-                walk(document.body, 0);
+                walk(document.body, 0, []);
 
-                return lines.join("\\n") || "(empty document)";
+                return {
+                    nodes: nodes,
+                    text: lines.join("\\n") || "(empty document)"
+                };
             }
 
             window.__devSendSelection = function(el) {
-
                 if (!el) return;
 
                 window.__devSelected = el;
 
-                let computed = getComputedStyle(el);
+                const computed = getComputedStyle(el);
 
-                let props = [
-                    "display",
-                    "position",
-                    "width",
-                    "height",
-                    "margin",
-                    "padding",
-                    "color",
-                    "background-color",
-                    "font-size",
-                    "font-family",
-                    "border",
-                    "opacity"
+                const props = [
+                    "display", "position", "width", "height",
+                    "margin", "padding", "color",
+                    "background-color", "font-size",
+                    "font-family", "border", "opacity"
                 ];
 
-                let css = props.map(function(p) {
-                    return p + ": " +
-                        computed.getPropertyValue(p) + ";";
+                const css = props.map(function(p) {
+                    return p + ": " + computed.getPropertyValue(p) + ";";
                 }).join("\\n");
 
-                let data = {
+                const treeResult = treeData();
+
+                const data = {
                     selector: selector(el),
                     html: (el.outerHTML || "").slice(0, 18000),
                     inlineCss: el.getAttribute("style") || "",
                     computedCss: css,
-                    tree: tree()
+                    tree: treeResult.text,
+                    treeNodes: treeResult.nodes
                 };
 
-                console.log(
-                    "__DEVBROWSER__" + JSON.stringify(data)
-                );
+                console.log("__DEVBROWSER__" + JSON.stringify(data));
             };
 
             document.addEventListener("click", function(e) {
-
                 if (!window.__devInspect) return;
 
                 e.preventDefault();
                 e.stopPropagation();
                 e.stopImmediatePropagation();
 
-                let el = e.target;
+                const el = e.target;
 
                 if (window.__devPreviousOutline) {
                     window.__devPreviousOutline.style.outline =
@@ -769,13 +731,10 @@ class MainActivity : Activity() {
                 }
 
                 window.__devPreviousOutline = el;
-                window.__devPreviousOutlineOutline =
-                    el.style.outline || "";
-
+                window.__devPreviousOutlineOutline = el.style.outline || "";
                 el.style.outline = "2px solid #ff5722";
 
                 window.__devSendSelection(el);
-
             }, true);
 
             window.__devSendSelection(document.body);
@@ -787,9 +746,6 @@ class MainActivity : Activity() {
     }
 
     private fun toggleInspect(enabled: Boolean) {
-
-        inspecting = enabled
-
         webView.evaluateJavascript(
             "window.__devInspect = $enabled;",
             null
@@ -804,7 +760,6 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Android")
     override fun onBackPressed() {
-
         if (::webView.isInitialized && webView.canGoBack()) {
             webView.goBack()
         } else {
@@ -813,12 +768,10 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-
         if (::webView.isInitialized) {
             webView.stopLoading()
             webView.destroy()
         }
-
         super.onDestroy()
     }
 }
